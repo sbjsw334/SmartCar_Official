@@ -1,5 +1,7 @@
 # H 题动态架构与固件任务
 
+12345
+
 ## 1. 架构结论
 
 本工程设计 3 台状态机。题目 2~6 是模式配置，不是状态。
@@ -49,9 +51,9 @@
 | --- | --- | --- | --- | --- |
 | `1` | 第 2 项：循线一圈停 A | `LEAVE_START` | `DISABLED` | 检出第二次 A 线并完成停车 |
 | `2` | 第 3 项：静态 `+5 -> -5 cm` | `DISABLED` | `WAIT_VISION` | `-50 mm` 误差不超过 `10 mm` 并稳定指定时间 |
-| `3` | 第 4 项：A 到 B、球稳 O | `LEAVE_START` | `WAIT_VISION` | 编码器里程到 AB，同时球目标为 `0 mm` |
-| `4` | 第 5 项：一圈、球稳 O | `LEAVE_START` | `WAIT_VISION` | 再次通过 A，同时球目标为 `0 mm` |
-| `5` | 第 6 项：一圈、球稳指定点 | `LEAVE_START` | `WAIT_VISION` | 再次通过 A，同时球保持指定目标 |
+| `3` | 第 4 项：A 到 B、球稳 O | `DISABLED`，视觉有效后进入 `LEAVE_START` | `WAIT_VISION` | 编码器里程到 AB，同时球目标为 `0 mm` |
+| `4` | 第 5 项：一圈、球稳 O | `DISABLED`，视觉有效后进入 `LEAVE_START` | `WAIT_VISION` | 再次通过 A，同时球目标为 `0 mm` |
+| `5` | 第 6 项：一圈、球稳指定点 | `DISABLED`，视觉有效后进入 `LEAVE_START` | `WAIT_VISION` | 再次通过 A，同时球保持指定目标 |
 
 ## 4. 当前工程进度
 
@@ -86,6 +88,7 @@
 4. 填充 `_BallMovePositive`、`_BallMoveNegative`、`_BallHoldTarget`。
 5. 状态切换必须使用“误差不超过 10 mm + 连续稳定时间”，不能用单帧命中。
 6. 视觉失效时不得保持旧控制量；超时应停止控制并上报故障。
+7. 模式 5 的指定位置通过 `appCarCon.setBallTargetMm()` 写入，不直接修改实体成员。
 
 交付测试：静止小车完成 `0 -> +50 -> -50 mm`，总时间不超过 5 s，最大位置误差不超过 10 mm。
 
