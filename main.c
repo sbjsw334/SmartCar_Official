@@ -6,6 +6,7 @@
 #include "bsp_k230.h"
 #include "bsp_key.h"
 #include "bsp_motor.h"
+#include "bsp_oled.h"
 #include "bsp_servo.h"
 #include "bsp_uart.h"
 #include "msg_map.h"
@@ -15,6 +16,8 @@ static volatile uint8_t s_controlMs = 0U;
 static volatile uint8_t s_telemetryMs = 0U;
 
 static void _ProcessDebugCommands(void);
+static void _ProcessKeyEvents(void);
+static void _UpdateOled(void);
 
 int main(void)
 {
@@ -29,6 +32,7 @@ int main(void)
     BspEncoder_Init();
     BspKey_Init();
     BspServo_Init();
+    BspOled_Init();
     BspUart_Init();
     BspK230_Init();
     appCarCon.init(&appCarMain);
@@ -39,12 +43,13 @@ int main(void)
         BspK230_Task();
         _ProcessDebugCommands();
 
-        if (BspKey_GetPressEvent() != 0U) {
-            (void)MsgMap_Post(MSG_KEY_START);
-        }
+        _ProcessKeyEvents();
 
         while (MsgMap_Get(&msg) != 0U) {
             appCarCon.run(&appCarMain, msg);
+            if (msg == MSG_TELEMETRY_200MS) {
+                _UpdateOled();
+            }
         }
     }
 }
@@ -109,4 +114,48 @@ static void _ProcessDebugCommands(void)
                 break;
         }
     }
+}
+
+static void _ProcessKeyEvents(void)
+{
+    uint8_t events = BspKey_GetPressEvents();
+
+    if ((events & BSP_KEY_EVENT_START) != 0U) {
+        (void)MsgMap_Post(MSG_KEY_START);
+    }
+
+    if ((events & BSP_KEY_EVENT_MODE) != 0U) {
+        AppCarMode_t mode = (AppCarMode_t)(appCarMain.mode + 1U);
+
+        if (mode > APP_CAR_MODE_BALANCE_LAP_TARGET) {
+            mode = APP_CAR_MODE_TRACE_ONLY;
+        }
+        appCarCon.setMode(&appCarMain, mode);
+    }
+
+    if ((events & BSP_KEY_EVENT_PLUS) != 0U) {
+        appCarCon.setBallTargetMm(&appCarMain,
+            (int16_t)(appCarMain.ballTargetMm + 10));
+    }
+
+    if ((events & BSP_KEY_EVENT_MINUS) != 0U) {
+        appCarCon.setBallTargetMm(&appCarMain,
+            (int16_t)(appCarMain.ballTargetMm - 10));
+    }
+}
+
+static void _UpdateOled(void)
+{
+    BspOledStatusView_t view;
+
+    view.mode = (uint8_t)appCarMain.mode;
+    view.fatherState = (uint8_t)appCarMain.fatherState;
+    view.routeState = (uint8_t)appCarMain.routeState;
+    view.ballState = (uint8_t)appCarMain.ballState;
+    view.elapsedMs = appCarMain.elapsedMs;
+    view.ballTargetMm = appCarMain.ballTargetMm;
+    view.ballOffsetPx = appCarMain.ballOffsetPx;
+    view.ballValid = appCarMain.ballValid;
+    view.gray = appCarMain.gray;
+    BspOled_ShowStatus(&view);
 }
