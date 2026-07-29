@@ -1,0 +1,20 @@
+# CCS-generated build output
+Debug/
+Release/
+
+# Common embedded build artifacts
+*.o
+*.obj
+*.out
+*.map
+*.hex
+*.bin
+*.d
+
+# Editor and OS metadata
+.vscode/
+.idea/
+*.launch
+.DS_Store
+Thumbs.db
+

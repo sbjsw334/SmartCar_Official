@@ -1,0 +1,229 @@
+// @v2CliArgs --device "MSPM0G3507" --package "LQFP-64(PM)"
+/**
+ * Pin assignments follow G3507引脚分配表_1.xlsx.
+ * PB17/PB18 are assigned to the 8-channel line sensor. The OLED assignment
+ * on those same pins is mutually exclusive and is disabled in this build.
+ */
+// @cliArgs --device "MSPM0G350X" --package "LQFP-64(PM)" --part "Default" --product "mspm0_sdk@2.10.00.04"
+// @versions {"tool":"1.28.0"}
+
+const GPIO    = scripting.addModule("/ti/driverlib/GPIO", {}, false);
+const GPIO1   = GPIO.addInstance();
+const GPIO2   = GPIO.addInstance();
+const GPIO3   = GPIO.addInstance();
+const GPIO4   = GPIO.addInstance();
+const GPIO5   = GPIO.addInstance();
+const GPIO6   = GPIO.addInstance();
+const GPIO7   = GPIO.addInstance();
+const PWM     = scripting.addModule("/ti/driverlib/PWM", {}, false);
+const PWM1    = PWM.addInstance();
+const PWM2    = PWM.addInstance();
+const PWM3    = PWM.addInstance();
+const SYSCTL  = scripting.addModule("/ti/driverlib/SYSCTL");
+const SYSTICK = scripting.addModule("/ti/driverlib/SYSTICK");
+const UART    = scripting.addModule("/ti/driverlib/UART", {}, false);
+const UART1   = UART.addInstance();
+const UART2   = UART.addInstance();
+
+/* TB6612 motor PWM: PA16/TIMA1_CCP1 and PB20/TIMA0_CCP1. */
+PWM1.$name                      = "PWM_MOTOR_A";
+PWM1.ccIndex                    = [1];
+PWM1.enableShadowLoad           = true;
+PWM1.clockDivider               = 8;
+PWM1.clockPrescale              = 4;
+PWM1.timerCount                 = 67;
+PWM1.timerStartTimer            = true;
+PWM1.peripheral.$assign         = "TIMA1";
+PWM1.peripheral.ccp1Pin.$assign = "PA16";
+PWM1.ccp1PinConfig.$name        = "ti_driverlib_gpio_PWM_MOTOR_A";
+PWM1.PWM_CHANNEL_1.$name        = "ti_driverlib_pwm_TB6612_PWMA";
+
+PWM2.$name                      = "PWM_MOTOR_B";
+PWM2.ccIndex                    = [1];
+PWM2.enableShadowLoad           = true;
+PWM2.clockDivider               = 8;
+PWM2.clockPrescale              = 4;
+PWM2.timerCount                 = 67;
+PWM2.timerStartTimer            = true;
+PWM2.peripheral.$assign         = "TIMA0";
+PWM2.peripheral.ccp1Pin.$assign = "PB20";
+PWM2.ccp1PinConfig.$name        = "ti_driverlib_gpio_PWM_MOTOR_B";
+PWM2.PWM_CHANNEL_1.$name        = "ti_driverlib_pwm_TB6612_PWMB";
+
+/* Two 50 Hz servo outputs reserved for the balance-bar mechanism. */
+PWM3.$name                      = "PWM_SERVO";
+PWM3.ccIndex                    = [0,1];
+PWM3.clockDivider               = 8;
+PWM3.timerCount                 = 80000;
+PWM3.timerStartTimer            = true;
+PWM3.peripheral.$assign         = "TIMG12";
+PWM3.peripheral.ccp0Pin.$assign = "PB13";
+PWM3.peripheral.ccp1Pin.$assign = "PB14";
+PWM3.ccp0PinConfig.$name        = "ti_driverlib_gpio_SERVO_1";
+PWM3.ccp1PinConfig.$name        = "ti_driverlib_gpio_SERVO_2";
+PWM3.PWM_CHANNEL_0.$name        = "ti_driverlib_pwm_SERVO_1";
+PWM3.PWM_CHANNEL_0.dutyCycle    = 7.5;
+PWM3.PWM_CHANNEL_1.$name        = "ti_driverlib_pwm_SERVO_2";
+PWM3.PWM_CHANNEL_1.dutyCycle    = 7.5;
+
+/* TB6612 direction and standby outputs span GPIOA and GPIOB. */
+GPIO1.$name                          = "MOTOR_GPIOA_OUT";
+GPIO1.port                           = "PORTA";
+GPIO1.associatedPins.create(2);
+GPIO1.associatedPins[0].$name        = "AIN1";
+GPIO1.associatedPins[0].assignedPin  = "31";
+GPIO1.associatedPins[0].initialValue = "CLEARED";
+GPIO1.associatedPins[0].pin.$assign  = "PA31";
+GPIO1.associatedPins[1].$name        = "STBY";
+GPIO1.associatedPins[1].assignedPin  = "8";
+GPIO1.associatedPins[1].initialValue = "CLEARED";
+GPIO1.associatedPins[1].pin.$assign  = "PA8";
+
+GPIO2.$name                          = "MOTOR_GPIOB_OUT";
+GPIO2.port                           = "PORTB";
+GPIO2.associatedPins.create(3);
+GPIO2.associatedPins[0].$name        = "AIN2";
+GPIO2.associatedPins[0].assignedPin  = "24";
+GPIO2.associatedPins[0].initialValue = "CLEARED";
+GPIO2.associatedPins[0].pin.$assign  = "PB24";
+GPIO2.associatedPins[1].$name        = "BIN1";
+GPIO2.associatedPins[1].assignedPin  = "0";
+GPIO2.associatedPins[1].initialValue = "CLEARED";
+GPIO2.associatedPins[1].pin.$assign  = "PB0";
+GPIO2.associatedPins[2].$name        = "BIN2";
+GPIO2.associatedPins[2].assignedPin  = "1";
+GPIO2.associatedPins[2].initialValue = "CLEARED";
+GPIO2.associatedPins[2].pin.$assign  = "PB1";
+
+/* Eight-channel line sensor. D5 is on GPIOA; the other inputs are on GPIOB. */
+GPIO3.$name                              = "GRAY_GPIOA_IN";
+GPIO3.port                               = "PORTA";
+GPIO3.associatedPins.create(1);
+GPIO3.associatedPins[0].$name            = "OUT5";
+GPIO3.associatedPins[0].direction        = "INPUT";
+GPIO3.associatedPins[0].assignedPin      = "7";
+GPIO3.associatedPins[0].internalResistor = "PULL_UP";
+GPIO3.associatedPins[0].pin.$assign      = "PA7";
+
+GPIO4.$name = "GRAY_GPIOB_IN";
+GPIO4.port  = "PORTB";
+GPIO4.associatedPins.create(7);
+GPIO4.associatedPins[0].$name            = "OUT1";
+GPIO4.associatedPins[0].direction        = "INPUT";
+GPIO4.associatedPins[0].assignedPin      = "17";
+GPIO4.associatedPins[0].internalResistor = "PULL_UP";
+GPIO4.associatedPins[0].pin.$assign      = "PB17";
+GPIO4.associatedPins[1].$name            = "OUT2";
+GPIO4.associatedPins[1].direction        = "INPUT";
+GPIO4.associatedPins[1].assignedPin      = "18";
+GPIO4.associatedPins[1].internalResistor = "PULL_UP";
+GPIO4.associatedPins[1].pin.$assign      = "PB18";
+GPIO4.associatedPins[2].$name            = "OUT3";
+GPIO4.associatedPins[2].direction        = "INPUT";
+GPIO4.associatedPins[2].assignedPin      = "26";
+GPIO4.associatedPins[2].internalResistor = "PULL_UP";
+GPIO4.associatedPins[2].pin.$assign      = "PB26";
+GPIO4.associatedPins[3].$name            = "OUT4";
+GPIO4.associatedPins[3].direction        = "INPUT";
+GPIO4.associatedPins[3].assignedPin      = "27";
+GPIO4.associatedPins[3].internalResistor = "PULL_UP";
+GPIO4.associatedPins[3].pin.$assign      = "PB27";
+GPIO4.associatedPins[4].$name            = "OUT6";
+GPIO4.associatedPins[4].direction        = "INPUT";
+GPIO4.associatedPins[4].assignedPin      = "15";
+GPIO4.associatedPins[4].internalResistor = "PULL_UP";
+GPIO4.associatedPins[4].pin.$assign      = "PB15";
+GPIO4.associatedPins[5].$name            = "OUT7";
+GPIO4.associatedPins[5].direction        = "INPUT";
+GPIO4.associatedPins[5].assignedPin      = "11";
+GPIO4.associatedPins[5].internalResistor = "PULL_UP";
+GPIO4.associatedPins[5].pin.$assign      = "PB11";
+GPIO4.associatedPins[6].$name            = "OUT8";
+GPIO4.associatedPins[6].direction        = "INPUT";
+GPIO4.associatedPins[6].assignedPin      = "12";
+GPIO4.associatedPins[6].internalResistor = "PULL_UP";
+GPIO4.associatedPins[6].pin.$assign      = "PB12";
+
+/* Quadrature encoders. GPIOA and GPIOB share the GROUP1 IRQ vector. */
+GPIO5.$name = "ENCODER_GPIOA_IN";
+GPIO5.port  = "PORTA";
+GPIO5.associatedPins.create(3);
+GPIO5.associatedPins[0].$name             = "LEFT_A";
+GPIO5.associatedPins[0].direction         = "INPUT";
+GPIO5.associatedPins[0].assignedPin       = "12";
+GPIO5.associatedPins[0].internalResistor  = "PULL_UP";
+GPIO5.associatedPins[0].interruptEn       = true;
+GPIO5.associatedPins[0].interruptPriority = "1";
+GPIO5.associatedPins[0].polarity          = "RISE_FALL";
+GPIO5.associatedPins[0].pin.$assign       = "PA12";
+GPIO5.associatedPins[1].$name             = "RIGHT_A";
+GPIO5.associatedPins[1].direction         = "INPUT";
+GPIO5.associatedPins[1].assignedPin       = "26";
+GPIO5.associatedPins[1].internalResistor  = "PULL_UP";
+GPIO5.associatedPins[1].interruptEn       = true;
+GPIO5.associatedPins[1].interruptPriority = "1";
+GPIO5.associatedPins[1].polarity          = "RISE_FALL";
+GPIO5.associatedPins[1].pin.$assign       = "PA26";
+GPIO5.associatedPins[2].$name             = "RIGHT_B";
+GPIO5.associatedPins[2].direction         = "INPUT";
+GPIO5.associatedPins[2].assignedPin       = "29";
+GPIO5.associatedPins[2].internalResistor  = "PULL_UP";
+GPIO5.associatedPins[2].interruptEn       = true;
+GPIO5.associatedPins[2].interruptPriority = "1";
+GPIO5.associatedPins[2].polarity          = "RISE_FALL";
+GPIO5.associatedPins[2].pin.$assign       = "PA29";
+
+GPIO6.$name = "ENCODER_GPIOB_IN";
+GPIO6.port  = "PORTB";
+GPIO6.associatedPins.create(1);
+GPIO6.associatedPins[0].$name             = "LEFT_B";
+GPIO6.associatedPins[0].direction         = "INPUT";
+GPIO6.associatedPins[0].assignedPin       = "21";
+GPIO6.associatedPins[0].internalResistor  = "PULL_UP";
+GPIO6.associatedPins[0].interruptEn       = true;
+GPIO6.associatedPins[0].interruptPriority = "1";
+GPIO6.associatedPins[0].polarity          = "RISE_FALL";
+GPIO6.associatedPins[0].pin.$assign       = "PB21";
+
+/* Existing start key. PA18 is unassigned in the authoritative table. */
+GPIO7.$name                              = "KEY_GPIO_IN";
+GPIO7.port                               = "PORTA";
+GPIO7.associatedPins.create(1);
+GPIO7.associatedPins[0].$name            = "START";
+GPIO7.associatedPins[0].direction        = "INPUT";
+GPIO7.associatedPins[0].assignedPin      = "18";
+GPIO7.associatedPins[0].internalResistor = "PULL_UP";
+GPIO7.associatedPins[0].pin.$assign      = "PA18";
+
+SYSCTL.forceDefaultClkConfig = true;
+
+SYSTICK.period          = 32000;
+SYSTICK.periodEnable    = true;
+SYSTICK.systickEnable   = true;
+SYSTICK.interruptEnable = true;
+
+/* Download/debug UART reserved by the table. */
+UART1.$name                    = "UART_0";
+UART1.targetBaudRate           = 115200;
+UART1.enabledInterrupts        = ["RX"];
+UART1.peripheral.$assign       = "UART0";
+UART1.peripheral.rxPin.$assign = "PA11";
+UART1.peripheral.txPin.$assign = "PA10";
+UART1.txPinConfig.$name        = "ti_driverlib_gpio_UART0_TX";
+UART1.rxPinConfig.$name        = "ti_driverlib_gpio_UART0_RX";
+
+/* K230: G3507 PB2 TX -> K230 GPIO6 RX, PB3 RX <- K230 GPIO5 TX. */
+UART2.$name                    = "UART_K230";
+UART2.targetBaudRate           = 115200;
+UART2.enabledInterrupts        = ["RX"];
+UART2.peripheral.$assign       = "UART3";
+UART2.peripheral.rxPin.$assign = "PB3";
+UART2.peripheral.txPin.$assign = "PB2";
+UART2.txPinConfig.$name        = "ti_driverlib_gpio_K230_TX";
+UART2.rxPinConfig.$name        = "ti_driverlib_gpio_K230_RX";
+
+const Board = scripting.addModule("/ti/driverlib/Board", {}, false);
+Board.peripheral.$suggestSolution          = "DEBUGSS";
+Board.peripheral.swclkPin.$suggestSolution = "PA20";
+Board.peripheral.swdioPin.$suggestSolution = "PA19";
+SYSCTL.peripheral.$suggestSolution         = "SYSCTL";
