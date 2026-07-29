@@ -55,6 +55,7 @@ struct _AppCarDef {
     uint32_t elapsedMs;
     uint32_t routeStateMs;
     uint32_t ballStateMs;
+    int16_t ballTargetMm;
     int16_t ballOffsetPx;
     int16_t leftSpeed;
     int16_t rightSpeed;
@@ -72,6 +73,7 @@ typedef struct {
     void (*init)(AppCarDef *pCar);
     void (*run)(AppCarDef *pCar, MsgId_t msg);
     void (*setMode)(AppCarDef *pCar, AppCarMode_t mode);
+    void (*setBallTargetMm)(AppCarDef *pCar, int16_t targetMm);
     AppCarFatherState_t (*getFatherState)(const AppCarDef *pCar);
     AppCarRouteState_t (*getRouteState)(const AppCarDef *pCar);
     AppCarBallState_t (*getBallState)(const AppCarDef *pCar);

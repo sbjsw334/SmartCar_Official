@@ -8,6 +8,7 @@ MSPM0G3507 的 H 题主控工程，只保留比赛主链路：
 - 摆杆舵机 PWM
 - K230 钢球位置 UART 接收及超时保护
 - 启动按键、调试串口、消息队列和 1 ms SysTick 调度
+- 状态机五 + 单件三：1 台母机和 2 台并行子机
 
 ## 串口命令
 
@@ -27,7 +28,7 @@ B,<offset_px>,<valid>\n
 
 ## 当前控制状态
 
-基础循迹已经启用，参数位于 `Application/trace_control.c`。轮速 PI、钢球位置 PD 和模式 2~5 的完整任务流程尚未实现。
+基础循迹已经启用，参数位于 `Application/trace_control.c`。三台状态机骨架已经接通；轮速 PI、钢球位置 PD、毫米标定和完整完成判据尚未实现。
 
 首次上电应架空车轮，先确认电机方向、灰度位序和舵机安全范围。
 
@@ -38,4 +39,4 @@ B,<offset_px>,<valid>\n
 - TI Arm Clang 5.1.1.LTS
 - 输出：`Debug/SmartCar_Official.out`
 
-接线见 `PINMAP.md`，代码分层见 `docs/ARCHITECTURE.md`。
+接线见 `PINMAP.md`，代码分层见 `docs/ARCHITECTURE.md`，状态规划和队友任务见 `docs/H_TASK_ARCHITECTURE.md`。
