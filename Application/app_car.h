@@ -63,6 +63,7 @@ struct _AppCarDef {
     uint16_t ballStableMs;
     int16_t ballTargetMm;
     int16_t ballOffsetMm;
+    uint32_t ballFrameSeq;
     int16_t leftSpeed;
     int16_t rightSpeed;
     int32_t leftCount;

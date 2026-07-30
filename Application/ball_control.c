@@ -1,9 +1,12 @@
 #include "ball_control.h"
 
-#define BALL_CONTROL_KP_US_PER_MM (3)
-#define BALL_CONTROL_KD_US_PER_MM (4)
+#define BALL_CONTROL_POS_TO_SPEED_DIV         (3)//它决定外环目标速度大小。数值越小，目标速度越大 3
+#define BALL_CONTROL_SPEED_LIMIT_MM_PER_FRAME (20)
+#define BALL_CONTROL_SPEED_KP_US_PER_MM       (5)//它决定舵机跟随速度误差的力度     1
+#define BALL_CONTROL_SPEED_KD_US_PER_MM       (0)//它负责刹车，压惯性              2
 
 static uint16_t _LimitPulse(int32_t pulseUs);
+static int16_t _LimitSpeed(int32_t speedMm);
 
 void BallControl_Init(BallControl_t *pControl)
 {
@@ -16,15 +19,21 @@ void BallControl_Reset(BallControl_t *pControl)
         return;
     }
 
-    pControl->lastErrorMm = 0;
-    pControl->hasLastError = 0U;
+    pControl->lastBallMm = 0;
+    pControl->lastSpeedErrorMm = 0;
+    pControl->lastFrameSeq = 0U;
+    pControl->lastPulseUs = BSP_SERVO_PULSE_CENTER_US;
+    pControl->hasFrame = 0U;
 }
 
 uint16_t BallControl_Update(BallControl_t *pControl,
-    int16_t targetMm, int16_t ballMm, uint8_t valid)
+    int16_t targetMm, int16_t ballMm, uint32_t frameSeq, uint8_t valid)
 {
-    int16_t errorMm;
-    int16_t deltaMm = 0;
+    int16_t positionErrorMm;
+    int16_t targetSpeedMm;
+    int16_t ballSpeedMm = 0;
+    int16_t speedErrorMm;
+    int16_t speedDeltaMm = 0;
     int32_t pulseUs;
 
     if ((pControl == 0) || (valid == 0U)) {
@@ -34,19 +43,47 @@ uint16_t BallControl_Update(BallControl_t *pControl,
         return BSP_SERVO_PULSE_CENTER_US;
     }
 
-    errorMm = (int16_t)(targetMm - ballMm);
-    if (pControl->hasLastError != 0U) {
-        deltaMm = (int16_t)(errorMm - pControl->lastErrorMm);
+    if ((pControl->hasFrame != 0U) &&
+        (frameSeq == pControl->lastFrameSeq)) {
+        return pControl->lastPulseUs;
     }
 
-    pControl->lastErrorMm = errorMm;
-    pControl->hasLastError = 1U;
+    positionErrorMm = (int16_t)(targetMm - ballMm);
+    targetSpeedMm = _LimitSpeed(
+        (int32_t)positionErrorMm / BALL_CONTROL_POS_TO_SPEED_DIV);
+
+    if (pControl->hasFrame != 0U) {
+        ballSpeedMm = (int16_t)(ballMm - pControl->lastBallMm);
+    }
+
+    speedErrorMm = (int16_t)(targetSpeedMm - ballSpeedMm);
+    if (pControl->hasFrame != 0U) {
+        speedDeltaMm = (int16_t)(
+            speedErrorMm - pControl->lastSpeedErrorMm);
+    }
 
     pulseUs = (int32_t)BSP_SERVO_PULSE_CENTER_US +
-        ((int32_t)BALL_CONTROL_KP_US_PER_MM * errorMm) +
-        ((int32_t)BALL_CONTROL_KD_US_PER_MM * deltaMm);
+        ((int32_t)BALL_CONTROL_SPEED_KP_US_PER_MM * speedErrorMm) +
+        ((int32_t)BALL_CONTROL_SPEED_KD_US_PER_MM * speedDeltaMm);
 
-    return _LimitPulse(pulseUs);
+    pControl->lastBallMm = ballMm;
+    pControl->lastSpeedErrorMm = speedErrorMm;
+    pControl->lastFrameSeq = frameSeq;
+    pControl->lastPulseUs = _LimitPulse(pulseUs);
+    pControl->hasFrame = 1U;
+
+    return pControl->lastPulseUs;
+}
+
+static int16_t _LimitSpeed(int32_t speedMm)
+{
+    if (speedMm < -BALL_CONTROL_SPEED_LIMIT_MM_PER_FRAME) {
+        return (int16_t)-BALL_CONTROL_SPEED_LIMIT_MM_PER_FRAME;
+    }
+    if (speedMm > BALL_CONTROL_SPEED_LIMIT_MM_PER_FRAME) {
+        return BALL_CONTROL_SPEED_LIMIT_MM_PER_FRAME;
+    }
+    return (int16_t)speedMm;
 }
 
 static uint16_t _LimitPulse(int32_t pulseUs)

@@ -104,6 +104,7 @@ static void _Init(AppCarDef *pCar)
     pCar->ballStableMs = 0U;
     pCar->ballTargetMm = 0;
     pCar->ballOffsetMm = 0;
+    pCar->ballFrameSeq = 0U;
     pCar->leftSpeed = 0;
     pCar->rightSpeed = 0;
     pCar->leftCount = 0;
@@ -534,6 +535,7 @@ static void _SampleInputs(AppCarDef *pCar)
     pCar->routePulses =
         (_AbsCount(encoder.leftCount) + _AbsCount(encoder.rightCount)) / 2U;
     pCar->ballOffsetMm = ball.offsetMm;
+    pCar->ballFrameSeq = ball.frameSeq;
     pCar->ballValid = ball.valid;
 }
 
@@ -552,7 +554,8 @@ static void _RunTraceControl(AppCarDef *pCar)
 static void _RunBallControl(AppCarDef *pCar, int16_t targetMm)
 {
     uint16_t pulseUs = BallControl_Update(&pCar->ballControl,
-        targetMm, pCar->ballOffsetMm, pCar->ballValid);
+        targetMm, pCar->ballOffsetMm, pCar->ballFrameSeq,
+        pCar->ballValid);
 
     BspServo_SetPulseUs(pulseUs);
 }

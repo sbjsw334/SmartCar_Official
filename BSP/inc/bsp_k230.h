@@ -8,6 +8,7 @@
 #define BSP_K230_TIMEOUT_MS     (100U)
 
 typedef struct {
+    uint32_t frameSeq;
     int16_t offsetMm;
     uint8_t valid;
 } BspK230Ball_t;

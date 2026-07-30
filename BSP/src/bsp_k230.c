@@ -26,6 +26,7 @@ void BspK230_Init(void)
     s_rxHead = 0U;
     s_rxTail = 0U;
     s_lineLength = 0U;
+    s_ball.frameSeq = 0U;
     s_ball.offsetMm = 0;
     s_ball.valid = 0U;
     s_debug.rxBytes = 0U;
@@ -135,6 +136,7 @@ static void _ProcessByte(uint8_t byte)
         s_line[s_lineLength] = '\0';
         if (_ParseBallLine(s_line, &position, &valid) != 0U) {
             __disable_irq();
+            s_ball.frameSeq++;
             s_ball.offsetMm = position;
             s_ageMs = 0U;
             s_ball.valid = valid;
