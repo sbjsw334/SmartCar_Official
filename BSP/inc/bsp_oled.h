@@ -9,7 +9,7 @@ typedef struct {
     uint32_t elapsedMs;
     uint32_t routePulses;
     int16_t ballTargetMm;
-    int16_t ballOffsetPx;
+    int16_t ballOffsetMm;
     uint8_t ballValid;
     uint8_t gray;
 } BspOledStatusView_t;

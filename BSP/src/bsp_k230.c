@@ -25,7 +25,7 @@ void BspK230_Init(void)
     s_rxHead = 0U;
     s_rxTail = 0U;
     s_lineLength = 0U;
-    s_ball.offsetPx = 0;
+    s_ball.offsetMm = 0;
     s_ball.valid = 0U;
     s_ageMs = BSP_K230_TIMEOUT_MS;
 
@@ -112,7 +112,7 @@ static void _ProcessByte(uint8_t byte)
         s_line[s_lineLength] = '\0';
         if (_ParseBallLine(s_line, &position, &valid) != 0U) {
             __disable_irq();
-            s_ball.offsetPx = position;
+            s_ball.offsetMm = position;
             s_ageMs = 0U;
             s_ball.valid = valid;
             __enable_irq();
@@ -174,11 +174,11 @@ static uint8_t _ParseBallLine(const char *line, int16_t *pPosition, uint8_t *pVa
 
 static int16_t _ClampPosition(int32_t position)
 {
-    if (position < BSP_K230_OFFSET_MIN_PX) {
-        return BSP_K230_OFFSET_MIN_PX;
+    if (position < BSP_K230_OFFSET_MIN_MM) {
+        return BSP_K230_OFFSET_MIN_MM;
     }
-    if (position > BSP_K230_OFFSET_MAX_PX) {
-        return BSP_K230_OFFSET_MAX_PX;
+    if (position > BSP_K230_OFFSET_MAX_MM) {
+        return BSP_K230_OFFSET_MAX_MM;
     }
     return (int16_t)position;
 }

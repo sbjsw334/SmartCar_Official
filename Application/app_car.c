@@ -29,6 +29,11 @@
 
 #define APP_CAR_TARGET_MIN_MM             (-100)
 #define APP_CAR_TARGET_MAX_MM             (100)
+#define APP_CAR_BALL_CENTER_MM            (0)
+#define APP_CAR_BALL_POSITIVE_MM          (50)
+#define APP_CAR_BALL_NEGATIVE_MM          (-50)
+#define APP_CAR_BALL_STABLE_ERROR_MM      (10)
+#define APP_CAR_BALL_STABLE_MS            (250U)
 
 static void _Init(AppCarDef *pCar);
 static void _Run(AppCarDef *pCar, MsgId_t msg);
@@ -65,6 +70,8 @@ static void _ConfigureChildren(AppCarDef *pCar);
 static void _RunChildren(AppCarDef *pCar);
 static void _SampleInputs(AppCarDef *pCar);
 static void _RunTraceControl(AppCarDef *pCar);
+static void _RunBallControl(AppCarDef *pCar, int16_t targetMm);
+static uint8_t _IsBallStable(AppCarDef *pCar, int16_t targetMm);
 static uint8_t _IsFinishLine(uint8_t gray);
 static uint32_t _AbsCount(int32_t count);
 static void _PrintTelemetry(const AppCarDef *pCar);
@@ -94,8 +101,9 @@ static void _Init(AppCarDef *pCar)
     pCar->ballStateMs = 0U;
     pCar->routePulses = 0U;
     pCar->finishLineMs = 0U;
+    pCar->ballStableMs = 0U;
     pCar->ballTargetMm = 0;
-    pCar->ballOffsetPx = 0;
+    pCar->ballOffsetMm = 0;
     pCar->leftSpeed = 0;
     pCar->rightSpeed = 0;
     pCar->leftCount = 0;
@@ -109,6 +117,7 @@ static void _Init(AppCarDef *pCar)
     pCar->timerRunning = 0U;
 
     TraceControl_Init(&pCar->trace);
+    BallControl_Init(&pCar->ballControl);
     TraceControl_SetBaseSpeed(&pCar->trace, _GetTraceSpeed(pCar->mode));
     _SetRouteState(pCar, APP_CAR_ROUTE_DISABLED);
     _SetBallState(pCar, APP_CAR_BALL_DISABLED);
@@ -117,7 +126,7 @@ static void _Init(AppCarDef *pCar)
 
     BspUart_Printf("\n[H] state-machine foundation ready\n");
     BspUart_Printf("[H] 2..6=mode, s=start, x=stop\n");
-    BspUart_Printf("[K230] B,<offset_px>,<valid>\\n\n");
+    BspUart_Printf("[K230] B,<offset_mm>,<valid>\\n\n");
     _PrintTelemetry(pCar);
 }
 
@@ -146,6 +155,12 @@ static void _SetMode(AppCarDef *pCar, AppCarMode_t mode)
     }
 
     pCar->mode = mode;
+    if (mode == APP_CAR_MODE_BALL_STATIC) {
+        pCar->ballTargetMm = APP_CAR_BALL_CENTER_MM;
+        BallControl_Reset(&pCar->ballControl);
+    } else {
+        BspServo_Center();
+    }
     TraceControl_SetBaseSpeed(&pCar->trace, _GetTraceSpeed(mode));
     BspUart_Printf("[MODE] %u\n", (unsigned)mode);
 }
@@ -189,6 +204,10 @@ static void _FatherStopped(AppCarDef *pCar, MsgId_t msg)
         _EnterFault(pCar);
     } else if (msg == MSG_CONTROL_TICK) {
         _SampleInputs(pCar);
+        if (pCar->mode == APP_CAR_MODE_BALL_STATIC) {
+            pCar->ballTargetMm = APP_CAR_BALL_CENTER_MM;
+            _RunBallControl(pCar, APP_CAR_BALL_CENTER_MM);
+        }
     } else if (msg == MSG_TELEMETRY_200MS) {
         _PrintTelemetry(pCar);
     }
@@ -315,7 +334,7 @@ static void _BallWaitVision(AppCarDef *pCar)
     }
 
     if (pCar->mode == APP_CAR_MODE_BALL_STATIC) {
-        pCar->ballTargetMm = 50;
+        pCar->ballTargetMm = APP_CAR_BALL_POSITIVE_MM;
         _SetBallState(pCar, APP_CAR_BALL_MOVE_POSITIVE);
     } else {
         _SetRouteState(pCar, APP_CAR_ROUTE_LEAVE_START);
@@ -325,23 +344,29 @@ static void _BallWaitVision(AppCarDef *pCar)
 
 static void _BallMovePositive(AppCarDef *pCar)
 {
-    /* Firmware owner: run ball controller toward +50 mm, then switch state. */
-    (void)pCar;
-    BspServo_Center();
+    pCar->ballTargetMm = APP_CAR_BALL_POSITIVE_MM;
+    _RunBallControl(pCar, APP_CAR_BALL_POSITIVE_MM);
+
+    if (_IsBallStable(pCar, APP_CAR_BALL_POSITIVE_MM) != 0U) {
+        pCar->ballTargetMm = APP_CAR_BALL_NEGATIVE_MM;
+        _SetBallState(pCar, APP_CAR_BALL_MOVE_NEGATIVE);
+    }
 }
 
 static void _BallMoveNegative(AppCarDef *pCar)
 {
-    /* Firmware owner: run ball controller toward -50 mm, then switch state. */
-    (void)pCar;
-    BspServo_Center();
+    pCar->ballTargetMm = APP_CAR_BALL_NEGATIVE_MM;
+    _RunBallControl(pCar, APP_CAR_BALL_NEGATIVE_MM);
+
+    if (_IsBallStable(pCar, APP_CAR_BALL_NEGATIVE_MM) != 0U) {
+        _SetBallState(pCar, APP_CAR_BALL_HOLD_TARGET);
+        _EnterFinished(pCar);
+    }
 }
 
 static void _BallHoldTarget(AppCarDef *pCar)
 {
-    /* Firmware owner: keep running ball position PD at the selected target. */
-    (void)pCar;
-    BspServo_Center();
+    _RunBallControl(pCar, pCar->ballTargetMm);
 }
 
 static void _EnterStopped(AppCarDef *pCar)
@@ -354,7 +379,9 @@ static void _EnterStopped(AppCarDef *pCar)
     pCar->rightCommand = 0;
     pCar->traceTurn = 0;
     pCar->traceState = (uint8_t)TRACE_STATE_SEARCHING;
+    pCar->ballStableMs = 0U;
     pCar->timerRunning = 0U;
+    BallControl_Reset(&pCar->ballControl);
     pCar->fatherState = APP_CAR_FATHER_STOPPED;
     pCar->pFatherState = _FatherStopped;
     _SetRouteState(pCar, APP_CAR_ROUTE_DISABLED);
@@ -375,8 +402,10 @@ static void _EnterRunning(AppCarDef *pCar)
     TraceControl_SetBaseSpeed(&pCar->trace, _GetTraceSpeed(pCar->mode));
     pCar->leftCommand = 0;
     pCar->rightCommand = 0;
+    pCar->ballStableMs = 0U;
     pCar->fatherState = APP_CAR_FATHER_RUNNING;
     pCar->pFatherState = _FatherRunning;
+    BallControl_Reset(&pCar->ballControl);
     _ConfigureChildren(pCar);
     BspUart_Printf("[RUN] start mode=%u\n", (unsigned)pCar->mode);
 }
@@ -435,6 +464,8 @@ static void _SetBallState(AppCarDef *pCar, AppCarBallState_t state)
 {
     pCar->ballState = state;
     pCar->ballStateMs = 0U;
+    pCar->ballStableMs = 0U;
+    BallControl_Reset(&pCar->ballControl);
 
     switch (state) {
         case APP_CAR_BALL_WAIT_VISION:
@@ -502,7 +533,7 @@ static void _SampleInputs(AppCarDef *pCar)
     pCar->rightCount = encoder.rightCount;
     pCar->routePulses =
         (_AbsCount(encoder.leftCount) + _AbsCount(encoder.rightCount)) / 2U;
-    pCar->ballOffsetPx = ball.offsetPx;
+    pCar->ballOffsetMm = ball.offsetMm;
     pCar->ballValid = ball.valid;
 }
 
@@ -516,6 +547,39 @@ static void _RunTraceControl(AppCarDef *pCar)
     pCar->traceState = (uint8_t)pCar->trace.state;
 
     BspMotor_SetSignedSpeed(pCar->leftCommand, pCar->rightCommand);
+}
+
+static void _RunBallControl(AppCarDef *pCar, int16_t targetMm)
+{
+    uint16_t pulseUs = BallControl_Update(&pCar->ballControl,
+        targetMm, pCar->ballOffsetMm, pCar->ballValid);
+
+    BspServo_SetPulseUs(pulseUs);
+}
+
+static uint8_t _IsBallStable(AppCarDef *pCar, int16_t targetMm)
+{
+    int16_t errorMm;
+
+    if (pCar->ballValid == 0U) {
+        pCar->ballStableMs = 0U;
+        return 0U;
+    }
+
+    errorMm = (int16_t)(targetMm - pCar->ballOffsetMm);
+    if (errorMm < 0) {
+        errorMm = (int16_t)-errorMm;
+    }
+
+    if (errorMm <= APP_CAR_BALL_STABLE_ERROR_MM) {
+        if (pCar->ballStableMs < APP_CAR_BALL_STABLE_MS) {
+            pCar->ballStableMs += APP_CAR_CONTROL_PERIOD_MS;
+        }
+    } else {
+        pCar->ballStableMs = 0U;
+    }
+
+    return (uint8_t)(pCar->ballStableMs >= APP_CAR_BALL_STABLE_MS);
 }
 
 static uint8_t _IsFinishLine(uint8_t gray)
@@ -549,7 +613,7 @@ static void _PrintTelemetry(const AppCarDef *pCar)
         (unsigned)pCar->mode,
         (unsigned long)pCar->elapsedMs,
         (int)pCar->ballTargetMm,
-        (int)pCar->ballOffsetPx,
+        (int)pCar->ballOffsetMm,
         (unsigned)pCar->ballValid,
         (unsigned)pCar->gray,
         (int)pCar->leftSpeed,

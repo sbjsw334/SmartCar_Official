@@ -156,7 +156,7 @@ static void _UpdateOled(void)
     view.elapsedMs = appCarMain.elapsedMs;
     view.routePulses = appCarMain.routePulses;
     view.ballTargetMm = appCarMain.ballTargetMm;
-    view.ballOffsetPx = appCarMain.ballOffsetPx;
+    view.ballOffsetMm = appCarMain.ballOffsetMm;
     view.ballValid = appCarMain.ballValid;
     view.gray = appCarMain.gray;
     BspOled_ShowStatus(&view);

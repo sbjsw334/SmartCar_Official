@@ -149,8 +149,8 @@ void BspOled_ShowStatus(const BspOledStatusView_t *pView)
     _ClearLine(line);
     index = 0U;
     _AppendText(line, &index, "BALL ");
-    _AppendSigned3(line, &index, pView->ballOffsetPx);
-    _AppendText(line, &index, " PX V");
+    _AppendSigned3(line, &index, pView->ballOffsetMm);
+    _AppendText(line, &index, " MM V");
     _AppendUnsigned(line, &index, pView->ballValid, 1U);
     _ShowLineIfChanged(4U, line);
 
