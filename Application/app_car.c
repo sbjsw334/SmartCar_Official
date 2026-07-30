@@ -25,7 +25,7 @@
     ((APP_CAR_LAP_EXPECTED_PULSES * APP_CAR_LAP_GATE_PERCENT) / 100U)
 #define APP_CAR_FINISH_CONFIRM_MS         (30U)
 #define APP_CAR_FINISH_FOLLOW_MS          (500U)     // 第二问 过线后继续循迹时间
-#define APP_CAR_FINISH_SENSOR_MIN         (6U)
+#define APP_CAR_FINISH_SENSOR_MIN         (4U)
 
 #define APP_CAR_TARGET_MIN_MM             (-100)
 #define APP_CAR_TARGET_MAX_MM             (100)
