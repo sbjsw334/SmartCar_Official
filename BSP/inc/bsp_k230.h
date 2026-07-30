@@ -5,7 +5,7 @@
 
 #define BSP_K230_OFFSET_MIN_PX  (-544)
 #define BSP_K230_OFFSET_MAX_PX  (544)
-#define BSP_K230_TIMEOUT_MS     (1000U)
+#define BSP_K230_TIMEOUT_MS     (100U)
 
 typedef struct {
     int16_t offsetPx;

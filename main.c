@@ -32,12 +32,14 @@ int main(void)
     BspEncoder_Init();
     BspKey_Init();
     BspServo_Init();
-    BspOled_Init();
     BspUart_Init();
+    BspOled_Init();
     BspK230_Init();
     appCarCon.init(&appCarMain);
+    _UpdateOled();
 
     __enable_irq();
+//    (void)MsgMap_Post(MSG_KEY_START);
 
     while (1) {
         BspK230_Task();
@@ -56,15 +58,16 @@ int main(void)
 
 void SysTick_Handler(void)
 {
+    AppCar_Tick1ms(&appCarMain);
     BspKey_Task1ms();
     BspGray_Task1ms();
     BspEncoder_Task1ms();
     BspK230_Task1ms();
 
     s_controlMs++;
-    if (s_controlMs >= 10U) {
+    if (s_controlMs >= APP_CAR_CONTROL_PERIOD_MS) {
         s_controlMs = 0U;
-        (void)MsgMap_Post(MSG_CONTROL_10MS);
+        (void)MsgMap_Post(MSG_CONTROL_TICK);
     }
 
     s_telemetryMs++;
@@ -80,23 +83,23 @@ static void _ProcessDebugCommands(void)
 
     while (BspUart_ReadCommand(&command) != 0U) {
         switch (command) {
-            case '1':
+            case '2':
                 appCarCon.setMode(&appCarMain, APP_CAR_MODE_TRACE_ONLY);
                 break;
 
-            case '2':
+            case '3':
                 appCarCon.setMode(&appCarMain, APP_CAR_MODE_BALL_STATIC);
                 break;
 
-            case '3':
+            case '4':
                 appCarCon.setMode(&appCarMain, APP_CAR_MODE_BALANCE_AB);
                 break;
 
-            case '4':
+            case '5':
                 appCarCon.setMode(&appCarMain, APP_CAR_MODE_BALANCE_LAP_CENTER);
                 break;
 
-            case '5':
+            case '6':
                 appCarCon.setMode(&appCarMain, APP_CAR_MODE_BALANCE_LAP_TARGET);
                 break;
 
@@ -150,9 +153,8 @@ static void _UpdateOled(void)
 
     view.mode = (uint8_t)appCarMain.mode;
     view.fatherState = (uint8_t)appCarMain.fatherState;
-    view.routeState = (uint8_t)appCarMain.routeState;
-    view.ballState = (uint8_t)appCarMain.ballState;
     view.elapsedMs = appCarMain.elapsedMs;
+    view.routePulses = appCarMain.routePulses;
     view.ballTargetMm = appCarMain.ballTargetMm;
     view.ballOffsetPx = appCarMain.ballOffsetPx;
     view.ballValid = appCarMain.ballValid;

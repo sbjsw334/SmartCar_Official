@@ -32,7 +32,7 @@ uint8_t MsgMap_Post(MsgId_t msg)
 
     __disable_irq();
 
-    if (((msg == MSG_CONTROL_10MS) && (s_queue.controlTickPending != 0U)) ||
+    if (((msg == MSG_CONTROL_TICK) && (s_queue.controlTickPending != 0U)) ||
         ((msg == MSG_TELEMETRY_200MS) && (s_queue.telemetryTickPending != 0U))) {
         __enable_irq();
         return 1U;
@@ -50,7 +50,7 @@ uint8_t MsgMap_Post(MsgId_t msg)
     s_queue.tail = (uint8_t)((s_queue.tail + 1U) % MSG_MAP_QUEUE_SIZE);
     s_queue.count++;
 
-    if (msg == MSG_CONTROL_10MS) {
+    if (msg == MSG_CONTROL_TICK) {
         s_queue.controlTickPending = 1U;
     } else if (msg == MSG_TELEMETRY_200MS) {
         s_queue.telemetryTickPending = 1U;
@@ -78,7 +78,7 @@ uint8_t MsgMap_Get(MsgId_t *pMsg)
     s_queue.head = (uint8_t)((s_queue.head + 1U) % MSG_MAP_QUEUE_SIZE);
     s_queue.count--;
 
-    if (*pMsg == MSG_CONTROL_10MS) {
+    if (*pMsg == MSG_CONTROL_TICK) {
         s_queue.controlTickPending = 0U;
     } else if (*pMsg == MSG_TELEMETRY_200MS) {
         s_queue.telemetryTickPending = 0U;

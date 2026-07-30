@@ -8,6 +8,8 @@
 typedef struct {
     int16_t leftPps;
     int16_t rightPps;
+    int32_t leftCount;
+    int32_t rightCount;
 } BspEncoderData_t;
 
 void BspEncoder_Init(void);

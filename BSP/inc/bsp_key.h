@@ -14,5 +14,6 @@ typedef enum {
 void BspKey_Init(void);
 void BspKey_Task1ms(void);
 uint8_t BspKey_GetPressEvents(void);
+uint8_t BspKey_GetPressed(void);
 
 #endif /* _BSP_KEY_H_ */

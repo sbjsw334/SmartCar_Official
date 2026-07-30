@@ -1,15 +1,10 @@
 #include "trace_control.h"
 
-#include "bsp_gray.h"
+#define TRACE_DEFAULT_SPEED (30)
+#define TRACE_SPEED_MIN     (10)
+#define TRACE_SPEED_MAX     (80)
 
-#define TRACE_BASE_SPEED          (20)
-#define TRACE_CORRECTION_LIGHT    (5)
-#define TRACE_CORRECTION_MEDIUM   (10)
-#define TRACE_CORRECTION_STRONG   (20)
-#define TRACE_SEARCH_REVERSE      (15)
-
-static void _SetTurn(TraceControl_t *pControl, int8_t turnLevel);
-static void _SearchLastDirection(TraceControl_t *pControl);
+static void _UseLastDirection(TraceControl_t *pControl);
 
 void TraceControl_Init(TraceControl_t *pControl)
 {
@@ -17,145 +12,115 @@ void TraceControl_Init(TraceControl_t *pControl)
         return;
     }
 
+    pControl->baseSpeed = TRACE_DEFAULT_SPEED;
     pControl->lastTurn = 0;
     pControl->state = TRACE_STATE_SEARCHING;
     pControl->leftCommand = 0;
     pControl->rightCommand = 0;
 }
 
-void TraceControl_Update(TraceControl_t *pControl, uint8_t gray)
+void TraceControl_SetBaseSpeed(TraceControl_t *pControl, int16_t speed)
 {
     if (pControl == 0) {
         return;
     }
 
-    if (gray == BSP_GRAY_ALL_BLACK) {
-        pControl->state = TRACE_STATE_STOP_MARK;
-        pControl->leftCommand = 0;
-        pControl->rightCommand = 0;
+    if (speed < TRACE_SPEED_MIN) {
+        speed = TRACE_SPEED_MIN;
+    } else if (speed > TRACE_SPEED_MAX) {
+        speed = TRACE_SPEED_MAX;
+    }
+    pControl->baseSpeed = speed;
+}
+
+void TraceControl_Update(TraceControl_t *pControl, uint8_t gray)
+{
+    uint8_t pattern;
+    int16_t speed;
+
+    if (pControl == 0) {
         return;
     }
 
-    switch (gray) {
-        case 0x08U:
-        case 0x10U:
-        case 0x18U:
-            pControl->lastTurn = 0;
-            pControl->state = TRACE_STATE_CENTERED;
-            pControl->leftCommand = TRACE_BASE_SPEED;
-            pControl->rightCommand = TRACE_BASE_SPEED;
-            break;
+    /* BspGray uses 1 for black; the proven rule table uses 0 for black. */
+    pattern = (uint8_t)~gray;
+    speed = pControl->baseSpeed;
 
-        case 0x04U:
-        case 0x0CU:
-            _SetTurn(pControl, 1);
-            break;
+    if ((pattern == 0xEFU) || (pattern == 0xE7U) ||
+        (pattern == 0xF7U)) {
+        pControl->leftCommand = speed;
+        pControl->rightCommand = speed;
+        pControl->lastTurn = 0;
+        pControl->state = TRACE_STATE_CENTERED;
+    } else if ((pattern == 0xF3U) || (pattern == 0xFBU)) {
+        pControl->leftCommand = speed + 5;
+        pControl->rightCommand = speed - 5;
+        pControl->lastTurn = 1;
+        pControl->state = TRACE_STATE_TRACKING;
+    } else if ((pattern == 0xF9U) || (pattern == 0xFDU)) {
+        pControl->leftCommand = speed + 8;
+        pControl->rightCommand = speed - 8;
+        pControl->lastTurn = 2;
+        pControl->state = TRACE_STATE_TRACKING;
+    } else if ((pattern == 0xFCU) || (pattern == 0xFEU)) {
+        pControl->leftCommand = speed + 10;
+        pControl->rightCommand = speed - 10;
+        pControl->lastTurn = 3;
+        pControl->state = TRACE_STATE_TRACKING;
+    } else if ((pattern == 0xCFU) || (pattern == 0xDFU)) {
+        pControl->leftCommand = speed - 5;
+        pControl->rightCommand = speed + 5;
+        pControl->lastTurn = -1;
+        pControl->state = TRACE_STATE_TRACKING;
+    } else if ((pattern == 0x9FU) || (pattern == 0xBFU)) {
+        pControl->leftCommand = speed - 8;
+        pControl->rightCommand = speed + 8;
+        pControl->lastTurn = -2;
+        pControl->state = TRACE_STATE_TRACKING;
+    } else if ((pattern == 0x3FU) || (pattern == 0x7FU)) {
+        pControl->leftCommand = speed - 10;
+        pControl->rightCommand = speed + 10;
+        pControl->lastTurn = -3;
+        pControl->state = TRACE_STATE_TRACKING;
+    } else {
+        pControl->state = TRACE_STATE_SEARCHING;
+        _UseLastDirection(pControl);
+    }
+}
 
-        case 0x02U:
-        case 0x06U:
-            _SetTurn(pControl, 2);
-            break;
+static void _UseLastDirection(TraceControl_t *pControl)
+{
+    int16_t speed = pControl->baseSpeed;
 
-        case 0x01U:
-        case 0x03U:
-            _SetTurn(pControl, 3);
+    switch (pControl->lastTurn) {
+        case 3:
+            pControl->leftCommand = speed + 10;
+            pControl->rightCommand = -10;
             break;
-
-        case 0x20U:
-        case 0x30U:
-            _SetTurn(pControl, -1);
+        case 2:
+            pControl->leftCommand = speed + 8;
+            pControl->rightCommand = -5;
             break;
-
-        case 0x40U:
-        case 0x60U:
-            _SetTurn(pControl, -2);
+        case 1:
+            pControl->leftCommand = speed + 5;
+            pControl->rightCommand = 0;
             break;
-
-        case 0x80U:
-        case 0xC0U:
-            _SetTurn(pControl, -3);
+        case -1:
+            pControl->leftCommand = 0;
+            pControl->rightCommand = speed + 5;
             break;
-
-        /* Wide edge patterns usually appear at a right-angle bend. */
-        case 0x07U:
-        case 0x0FU:
-        case 0x1FU:
-        case 0x3FU:
-        case 0x7FU:
-            pControl->lastTurn = 3;
-            _SearchLastDirection(pControl);
+        case -2:
+            pControl->leftCommand = -5;
+            pControl->rightCommand = speed + 8;
             break;
-
-        case 0xE0U:
-        case 0xF0U:
-        case 0xF8U:
-        case 0xFCU:
-        case 0xFEU:
-            pControl->lastTurn = -3;
-            _SearchLastDirection(pControl);
+        case -3:
+            pControl->leftCommand = -10;
+            pControl->rightCommand = speed + 10;
             break;
-
+        case 0:
         default:
-            _SearchLastDirection(pControl);
+            pControl->leftCommand = speed;
+            pControl->rightCommand = speed;
             break;
-    }
-}
-
-static void _SetTurn(TraceControl_t *pControl, int8_t turnLevel)
-{
-    int16_t correction;
-
-    if ((turnLevel > 3) || (turnLevel < -3)) {
-        return;
-    }
-
-    if ((turnLevel == 1) || (turnLevel == -1)) {
-        correction = TRACE_CORRECTION_LIGHT;
-    } else if ((turnLevel == 2) || (turnLevel == -2)) {
-        correction = TRACE_CORRECTION_MEDIUM;
-    } else {
-        correction = TRACE_CORRECTION_STRONG;
-    }
-
-    pControl->lastTurn = turnLevel;
-    pControl->state = TRACE_STATE_TRACKING;
-
-    if (turnLevel > 0) {
-        pControl->leftCommand = TRACE_BASE_SPEED + correction;
-        pControl->rightCommand = TRACE_BASE_SPEED - correction;
-    } else {
-        pControl->leftCommand = TRACE_BASE_SPEED - correction;
-        pControl->rightCommand = TRACE_BASE_SPEED + correction;
-    }
-}
-
-static void _SearchLastDirection(TraceControl_t *pControl)
-{
-    int16_t searchSpeed;
-    int16_t insideSpeed;
-    int8_t level = pControl->lastTurn;
-
-    pControl->state = TRACE_STATE_SEARCHING;
-
-    if (level == 0) {
-        pControl->leftCommand = TRACE_BASE_SPEED;
-        pControl->rightCommand = TRACE_BASE_SPEED;
-        return;
-    }
-
-    searchSpeed = TRACE_BASE_SPEED + TRACE_CORRECTION_STRONG;
-    insideSpeed = 0;
-    if ((level >= 3) || (level <= -3)) {
-        insideSpeed = -TRACE_SEARCH_REVERSE;
-    } else if ((level == 2) || (level == -2)) {
-        insideSpeed = -TRACE_CORRECTION_LIGHT;
-    }
-
-    if (level > 0) {
-        pControl->leftCommand = searchSpeed;
-        pControl->rightCommand = insideSpeed;
-    } else {
-        pControl->leftCommand = insideSpeed;
-        pControl->rightCommand = searchSpeed;
     }
 }

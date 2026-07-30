@@ -5,7 +5,6 @@
 /* H-task competition pin map for the LP-MSPM0G3507 LaunchPad. */
 const GPIO    = scripting.addModule("/ti/driverlib/GPIO", {}, false);
 const GPIO1   = GPIO.addInstance();
-const GPIO2   = GPIO.addInstance();
 const GPIO3   = GPIO.addInstance();
 const GPIO4   = GPIO.addInstance();
 const GPIO5   = GPIO.addInstance();
@@ -21,7 +20,7 @@ const UART    = scripting.addModule("/ti/driverlib/UART", {}, false);
 const UART1   = UART.addInstance();
 const UART2   = UART.addInstance();
 
-/* TB6612 motor PWM: PB1/TIMA1_CCP1 and PB13/TIMA0_CCP3. */
+/* TB6612 motor PWM, matching the proven Test_Trace_plus polarity. */
 PWM1.$name                      = "PWM_MOTOR_A";
 PWM1.ccIndex                    = [1];
 PWM1.enableShadowLoad           = true;
@@ -34,19 +33,22 @@ PWM1.peripheral.ccp1Pin.$assign = "PB1";
 PWM1.ccp1PinConfig.$name        = "ti_driverlib_gpio_PWM_MOTOR_A";
 PWM1.PWM_CHANNEL_1.$name        = "ti_driverlib_pwm_TB6612_PWMA";
 
-PWM2.$name                      = "PWM_MOTOR_B";
-PWM2.ccIndex                    = [3];
-PWM2.enableShadowLoad           = true;
-PWM2.clockDivider               = 8;
-PWM2.clockPrescale              = 4;
-PWM2.timerCount                 = 67;
-PWM2.timerStartTimer            = true;
-PWM2.peripheral.$assign         = "TIMA0";
-PWM2.peripheral.ccp3Pin.$assign = "PB13";
-PWM2.ccp3PinConfig.$name        = "ti_driverlib_gpio_PWM_MOTOR_B";
-PWM2.PWM_CHANNEL_3.$name        = "ti_driverlib_pwm_TB6612_PWMB";
+PWM2.$name                           = "PWM_MOTOR_B";
+PWM2.ccIndex                         = [1];
+PWM2.ccIndexCmpl                     = [1];
+PWM2.enableShadowLoad                = true;
+PWM2.clockDivider                    = 8;
+PWM2.clockPrescale                   = 4;
+PWM2.timerCount                      = 67;
+PWM2.timerStartTimer                 = true;
+PWM2.peripheral.$assign              = "TIMA0";
+PWM2.peripheral.ccp1Pin_cmpl.$assign = "PB13";
+PWM2.ccp1PinConfig.$name             = "ti_driverlib_gpio_PWM_MOTOR_B_BASE";
+PWM2.ccp1Pin_cmplConfig.$name        = "ti_driverlib_gpio_PWM_MOTOR_B";
+PWM2.PWM_CHANNEL_1.$name             = "ti_driverlib_pwm_TB6612_PWMB";
+PWM2.peripheral.ccp1Pin.$suggestSolution = "PA1";
 
-/* PB20 supports the temporary servo and the final stepper STEP signal. */
+/* Final LDX-218 servo: 50 Hz PWM on PB20. */
 PWM3.$name                      = "PWM_SERVO";
 PWM3.ccIndex                    = [0];
 PWM3.clockDivider               = 8;
@@ -54,8 +56,8 @@ PWM3.timerCount                 = 80000;
 PWM3.timerStartTimer            = true;
 PWM3.peripheral.$assign         = "TIMG12";
 PWM3.peripheral.ccp0Pin.$assign = "PB20";
-PWM3.ccp0PinConfig.$name        = "ti_driverlib_gpio_ACT_PWM_STEP";
-PWM3.PWM_CHANNEL_0.$name        = "ti_driverlib_pwm_ACT_PWM_STEP";
+PWM3.ccp0PinConfig.$name        = "ti_driverlib_gpio_SERVO_PWM";
+PWM3.PWM_CHANNEL_0.$name        = "ti_driverlib_pwm_SERVO_PWM";
 PWM3.PWM_CHANNEL_0.dutyCycle    = 7.5;
 
 /* TB6612 direction and standby pins are all on GPIOA. */
@@ -82,19 +84,6 @@ GPIO1.associatedPins[4].$name        = "STBY";
 GPIO1.associatedPins[4].assignedPin  = "17";
 GPIO1.associatedPins[4].initialValue = "CLEARED";
 GPIO1.associatedPins[4].pin.$assign  = "PA17";
-
-/* Final stepper DIR/EN pins. EN starts high for common active-low drivers. */
-GPIO2.$name                          = "ACTUATOR_GPIOA_OUT";
-GPIO2.port                           = "PORTA";
-GPIO2.associatedPins.create(2);
-GPIO2.associatedPins[0].$name        = "DIR";
-GPIO2.associatedPins[0].assignedPin  = "31";
-GPIO2.associatedPins[0].initialValue = "CLEARED";
-GPIO2.associatedPins[0].pin.$assign  = "PA31";
-GPIO2.associatedPins[1].$name        = "EN";
-GPIO2.associatedPins[1].assignedPin  = "28";
-GPIO2.associatedPins[1].initialValue = "SET";
-GPIO2.associatedPins[1].pin.$assign  = "PA28";
 
 /* Eight-channel infrared line sensor, OUT1 is the most significant bit. */
 GPIO3.$name = "GRAY_GPIOB_IN";

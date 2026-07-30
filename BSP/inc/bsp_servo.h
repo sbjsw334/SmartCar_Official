@@ -3,9 +3,9 @@
 
 #include <stdint.h>
 
-#define BSP_SERVO_PULSE_MIN_US    (1000U)
+#define BSP_SERVO_PULSE_MIN_US    (1100U)
 #define BSP_SERVO_PULSE_CENTER_US (1500U)
-#define BSP_SERVO_PULSE_MAX_US    (2000U)
+#define BSP_SERVO_PULSE_MAX_US    (1900U)
 
 void BspServo_Init(void);
 void BspServo_SetPulseUs(uint16_t pulseUs);

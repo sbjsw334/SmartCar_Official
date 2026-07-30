@@ -14,7 +14,7 @@
 | OLED I2C | SCL / SDA | PB2 / PB3 |
 | K230 UART3 | G3507 TX / RX | PA26 / PA25 |
 | 四按键 | START / MODE / PLUS / MINUS | PA18 / PA22 / PA24 / PA27 |
-| 摆杆执行器 | PWM或STEP / DIR / EN | PB20 / PA31 / PA28 |
+| LDX-218 摆杆舵机 | PWM | PB20 |
 | PC 调试串口 | TX / RX | PA10 / PA11 |
 
 ## K230 接线
@@ -45,10 +45,9 @@ PA18 受 LaunchPad J15 跳线影响，装车前必须确认 BoosterPack 对应�
 ## 摆杆机构
 
 ```text
-临时舵机：PB20 输出 50 Hz PWM
-最终步进：PB20=STEP，PA31=DIR，PA28=EN
+LDX-218：PB20 输出 50 Hz PWM，中心脉宽 1500 us，软件安全范围 1100~1900 us
 ```
 
-舵机或步进驱动必须独立供电并与 MSPM0、K230 共地。PA28 上电默认高电平，用于让常见低有效 EN 步进驱动保持关闭；接入具体驱动前确认使能极性。
+舵机必须使用独立 6.0~8.4 V 电源，并与 MSPM0、K230 共地。PB20 只接舵机 PWM 信号；PA31、PA28 本题不使用。
 
 OLED 使用 PB2/PB3 的 I2C1，负责显示测试模式、目标位置和行驶总时间，屏幕尺寸不得超过 2 英寸。

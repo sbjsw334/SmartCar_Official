@@ -6,6 +6,8 @@
 #include "msg_map.h"
 #include "trace_control.h"
 
+#define APP_CAR_CONTROL_PERIOD_MS (2U)
+
 typedef struct _AppCarDef AppCarDef;
 
 typedef enum {
@@ -52,19 +54,24 @@ struct _AppCarDef {
     AppCarBallState_t ballState;
     AppCarMode_t mode;
 
-    uint32_t elapsedMs;
+    volatile uint32_t elapsedMs;
     uint32_t routeStateMs;
     uint32_t ballStateMs;
+    uint32_t routePulses;
+    uint16_t finishLineMs;
     int16_t ballTargetMm;
     int16_t ballOffsetPx;
     int16_t leftSpeed;
     int16_t rightSpeed;
+    int32_t leftCount;
+    int32_t rightCount;
     int16_t leftCommand;
     int16_t rightCommand;
     int8_t traceTurn;
     uint8_t traceState;
     uint8_t ballValid;
     uint8_t gray;
+    volatile uint8_t timerRunning;
 
     TraceControl_t trace;
 };
@@ -81,5 +88,8 @@ typedef struct {
 
 extern AppCarConDef appCarCon;
 extern AppCarDef appCarMain;
+
+/* Called by the 1 ms SysTick. Competition timing never depends on the queue. */
+void AppCar_Tick1ms(AppCarDef *pCar);
 
 #endif /* _APP_CAR_H_ */

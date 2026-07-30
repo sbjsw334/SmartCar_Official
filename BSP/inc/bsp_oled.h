@@ -6,9 +6,8 @@
 typedef struct {
     uint8_t mode;
     uint8_t fatherState;
-    uint8_t routeState;
-    uint8_t ballState;
     uint32_t elapsedMs;
+    uint32_t routePulses;
     int16_t ballTargetMm;
     int16_t ballOffsetPx;
     uint8_t ballValid;

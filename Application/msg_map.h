@@ -5,7 +5,7 @@
 
 typedef enum {
     MSG_NONE = 0,
-    MSG_CONTROL_10MS,
+    MSG_CONTROL_TICK,
     MSG_TELEMETRY_200MS,
     MSG_KEY_START,
     MSG_STOP,

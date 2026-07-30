@@ -11,7 +11,7 @@
 #define BSP_KEY_COUNT         (4U)
 
 static uint8_t s_samplePressed = 0U;
-static uint8_t s_stablePressed = 0U;
+static volatile uint8_t s_stablePressed = 0U;
 static uint8_t s_stableMs[BSP_KEY_COUNT];
 static volatile uint8_t s_pressEvents = 0U;
 
@@ -22,7 +22,7 @@ void BspKey_Init(void)
     uint8_t index;
 
     s_samplePressed = _ReadPressed();
-    s_stablePressed = s_samplePressed;
+    s_stablePressed = 0U;
     s_pressEvents = 0U;
     for (index = 0U; index < BSP_KEY_COUNT; index++) {
         s_stableMs[index] = 0U;
@@ -68,6 +68,11 @@ uint8_t BspKey_GetPressEvents(void)
     __enable_irq();
 
     return events;
+}
+
+uint8_t BspKey_GetPressed(void)
+{
+    return s_stablePressed;
 }
 
 static uint8_t _ReadPressed(void)

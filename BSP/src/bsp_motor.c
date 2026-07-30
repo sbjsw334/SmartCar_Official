@@ -11,10 +11,13 @@
 #define MOTOR_LEFT_TIMER   PWM_MOTOR_A_INST
 #define MOTOR_RIGHT_TIMER  PWM_MOTOR_B_INST
 #define MOTOR_LEFT_CC      DL_TIMER_CC_1_INDEX
-#define MOTOR_RIGHT_CC     DL_TIMER_CC_3_INDEX
+#define MOTOR_RIGHT_CC     DL_TIMER_CC_1_INDEX
+#define MOTOR_LEFT_COMPLEMENT  (0U)
+#define MOTOR_RIGHT_COMPLEMENT (1U)
 
 static uint16_t _AbsSpeed(int16_t speed);
-static uint32_t _SpeedToCompare(GPTIMER_Regs *timer, uint16_t speed);
+static uint32_t _SpeedToCompare(GPTIMER_Regs *timer, uint16_t speed,
+    uint8_t isComplement);
 static void _SetPwm(uint16_t leftSpeed, uint16_t rightSpeed);
 
 void BspMotor_Init(void)
@@ -59,17 +62,21 @@ static uint16_t _AbsSpeed(int16_t speed)
     return (value > BSP_MOTOR_SPEED_MAX) ? BSP_MOTOR_SPEED_MAX : value;
 }
 
-static uint32_t _SpeedToCompare(GPTIMER_Regs *timer, uint16_t speed)
+static uint32_t _SpeedToCompare(GPTIMER_Regs *timer, uint16_t speed,
+    uint8_t isComplement)
 {
     uint32_t loadValue = DL_TimerA_getLoadValue(timer);
+    uint32_t activeCounts = (loadValue * speed) / BSP_MOTOR_SPEED_MAX;
 
-    return loadValue - ((loadValue * speed) / BSP_MOTOR_SPEED_MAX);
+    return (isComplement != 0U) ? activeCounts : loadValue - activeCounts;
 }
 
 static void _SetPwm(uint16_t leftSpeed, uint16_t rightSpeed)
 {
     DL_TimerA_setCaptureCompareValue(MOTOR_LEFT_TIMER,
-        _SpeedToCompare(MOTOR_LEFT_TIMER, leftSpeed), MOTOR_LEFT_CC);
+        _SpeedToCompare(MOTOR_LEFT_TIMER, leftSpeed, MOTOR_LEFT_COMPLEMENT),
+        MOTOR_LEFT_CC);
     DL_TimerA_setCaptureCompareValue(MOTOR_RIGHT_TIMER,
-        _SpeedToCompare(MOTOR_RIGHT_TIMER, rightSpeed), MOTOR_RIGHT_CC);
+        _SpeedToCompare(MOTOR_RIGHT_TIMER, rightSpeed, MOTOR_RIGHT_COMPLEMENT),
+        MOTOR_RIGHT_CC);
 }

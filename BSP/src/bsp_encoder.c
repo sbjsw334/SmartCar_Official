@@ -60,6 +60,7 @@ void BspEncoder_Task1ms(void)
     int32_t rightNow;
     int32_t leftDelta;
     int32_t rightDelta;
+    uint32_t interruptState;
 
     s_speedMs++;
     if (s_speedMs < BSP_ENCODER_SPEED_PERIOD_MS) {
@@ -67,10 +68,11 @@ void BspEncoder_Task1ms(void)
     }
     s_speedMs = 0U;
 
+    interruptState = __get_PRIMASK();
     __disable_irq();
     leftNow = s_leftCount;
     rightNow = s_rightCount;
-    __enable_irq();
+    __set_PRIMASK(interruptState);
 
     leftDelta = leftNow - s_lastLeftCount;
     rightDelta = rightNow - s_lastRightCount;
@@ -85,6 +87,8 @@ void BspEncoder_Task1ms(void)
 
 void BspEncoder_Reset(void)
 {
+    uint32_t interruptState = __get_PRIMASK();
+
     __disable_irq();
     s_leftCount = 0;
     s_rightCount = 0;
@@ -93,19 +97,24 @@ void BspEncoder_Reset(void)
     s_leftPps = 0;
     s_rightPps = 0;
     s_speedMs = 0U;
-    __enable_irq();
+    __set_PRIMASK(interruptState);
 }
 
 void BspEncoder_GetData(BspEncoderData_t *pData)
 {
+    uint32_t interruptState;
+
     if (pData == 0) {
         return;
     }
 
+    interruptState = __get_PRIMASK();
     __disable_irq();
     pData->leftPps = s_leftPps;
     pData->rightPps = s_rightPps;
-    __enable_irq();
+    pData->leftCount = s_leftCount;
+    pData->rightCount = s_rightCount;
+    __set_PRIMASK(interruptState);
 }
 
 void GROUP1_IRQHandler(void)

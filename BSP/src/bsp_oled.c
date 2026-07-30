@@ -5,7 +5,7 @@
 #define BSP_OLED_ADDRESS          (0x3CU)
 #define BSP_OLED_WIDTH            (128U)
 #define BSP_OLED_PAGES            (8U)
-#define BSP_OLED_TEXT_ROWS        (6U)
+#define BSP_OLED_TEXT_ROWS        (8U)
 #define BSP_OLED_TEXT_COLS        (21U)
 #define BSP_OLED_CHAR_WIDTH       (6U)
 #define BSP_OLED_TRANSFER_TIMEOUT (100000U)
@@ -18,14 +18,14 @@ static uint8_t s_lineValidMask = 0U;
 static uint8_t _WritePacket(const uint8_t *pData, uint16_t length);
 static uint8_t _WriteCommand(uint8_t command);
 static uint8_t _WriteData(const uint8_t *pData, uint8_t length);
-static void _SetCursor(uint8_t page, uint8_t column);
+static uint8_t _SetCursor(uint8_t page, uint8_t column);
 static void _ShowChar(uint8_t row, uint8_t col, char character);
 static const uint8_t *_GetGlyph(char character);
 static void _ShowLineIfChanged(uint8_t row, const char *line);
 static void _ClearLine(char *line);
 static void _AppendChar(char *line, uint8_t *pIndex, char character);
 static void _AppendText(char *line, uint8_t *pIndex, const char *text);
-static void _AppendUnsigned(char *line, uint8_t *pIndex, uint16_t value,
+static void _AppendUnsigned(char *line, uint8_t *pIndex, uint32_t value,
     uint8_t digits);
 static void _AppendSigned3(char *line, uint8_t *pIndex, int16_t value);
 static char _HexDigit(uint8_t value);
@@ -64,11 +64,12 @@ void BspOled_Clear(void)
     }
 
     for (page = 0U; page < BSP_OLED_PAGES; page++) {
-        _SetCursor(page, 0U);
+        if (_SetCursor(page, 0U) == 0U) {
+            return;
+        }
         for (column = 0U; column < BSP_OLED_WIDTH;
              column += BSP_OLED_DATA_CHUNK) {
             if (_WriteData(zeros, sizeof(zeros)) == 0U) {
-                s_ready = 0U;
                 return;
             }
         }
@@ -98,6 +99,7 @@ void BspOled_ShowStatus(const BspOledStatusView_t *pView)
     char line[BSP_OLED_TEXT_COLS + 1U];
     uint8_t index;
     uint32_t elapsedSeconds;
+    uint16_t elapsedHundredths;
     const char *fatherName = "FAULT";
 
     if ((s_ready == 0U) || (pView == 0)) {
@@ -111,34 +113,11 @@ void BspOled_ShowStatus(const BspOledStatusView_t *pView)
 
     _ClearLine(line);
     index = 0U;
-    _AppendText(line, &index, "H MODE ");
-    _AppendUnsigned(line, &index, (uint16_t)(pView->mode + 1U), 1U);
-    _AppendChar(line, &index, ' ');
+    _AppendChar(line, &index, 'H');
+    _AppendUnsigned(line, &index, (uint16_t)(pView->mode + 2U), 1U);
+    _AppendText(line, &index, "  ");
     _AppendText(line, &index, fatherName);
     _ShowLineIfChanged(0U, line);
-
-    _ClearLine(line);
-    index = 0U;
-    _AppendText(line, &index, "ROUTE ");
-    _AppendUnsigned(line, &index, pView->routeState, 1U);
-    _AppendText(line, &index, " BALL ");
-    _AppendUnsigned(line, &index, pView->ballState, 1U);
-    _ShowLineIfChanged(1U, line);
-
-    _ClearLine(line);
-    index = 0U;
-    _AppendText(line, &index, "TARGET ");
-    _AppendSigned3(line, &index, pView->ballTargetMm);
-    _AppendText(line, &index, " MM");
-    _ShowLineIfChanged(2U, line);
-
-    _ClearLine(line);
-    index = 0U;
-    _AppendText(line, &index, "VISION ");
-    _AppendSigned3(line, &index, pView->ballOffsetPx);
-    _AppendText(line, &index, " V");
-    _AppendUnsigned(line, &index, pView->ballValid, 1U);
-    _ShowLineIfChanged(3U, line);
 
     _ClearLine(line);
     index = 0U;
@@ -147,8 +126,32 @@ void BspOled_ShowStatus(const BspOledStatusView_t *pView)
         elapsedSeconds = 9999U;
     }
     _AppendText(line, &index, "TIME ");
-    _AppendUnsigned(line, &index, (uint16_t)elapsedSeconds, 4U);
+    _AppendUnsigned(line, &index, elapsedSeconds, 4U);
+    _AppendChar(line, &index, '.');
+    elapsedHundredths = (uint16_t)((pView->elapsedMs % 1000U) / 10U);
+    _AppendUnsigned(line, &index, elapsedHundredths, 2U);
     _AppendText(line, &index, " S");
+    _ShowLineIfChanged(1U, line);
+
+    _ClearLine(line);
+    index = 0U;
+    _AppendText(line, &index, "ENC ");
+    _AppendUnsigned(line, &index, pView->routePulses, 6U);
+    _ShowLineIfChanged(2U, line);
+
+    _ClearLine(line);
+    index = 0U;
+    _AppendText(line, &index, "TARGET ");
+    _AppendSigned3(line, &index, pView->ballTargetMm);
+    _AppendText(line, &index, " MM");
+    _ShowLineIfChanged(3U, line);
+
+    _ClearLine(line);
+    index = 0U;
+    _AppendText(line, &index, "BALL ");
+    _AppendSigned3(line, &index, pView->ballOffsetPx);
+    _AppendText(line, &index, " PX V");
+    _AppendUnsigned(line, &index, pView->ballValid, 1U);
     _ShowLineIfChanged(4U, line);
 
     _ClearLine(line);
@@ -231,13 +234,16 @@ static uint8_t _WriteData(const uint8_t *pData, uint8_t length)
     return _WritePacket(packet, (uint16_t)(length + 1U));
 }
 
-static void _SetCursor(uint8_t page, uint8_t column)
+static uint8_t _SetCursor(uint8_t page, uint8_t column)
 {
-    if ((_WriteCommand((uint8_t)(0xB0U + page)) == 0U) ||
-        (_WriteCommand((uint8_t)(column & 0x0FU)) == 0U) ||
-        (_WriteCommand((uint8_t)(0x10U | (column >> 4))) == 0U)) {
-        s_ready = 0U;
-    }
+    uint8_t packet[4] = {
+        0x00U,
+        (uint8_t)(0xB0U + page),
+        (uint8_t)(column & 0x0FU),
+        (uint8_t)(0x10U | (column >> 4)),
+    };
+
+    return _WritePacket(packet, sizeof(packet));
 }
 
 static void _ShowChar(uint8_t row, uint8_t col, char character)
@@ -246,14 +252,14 @@ static void _ShowChar(uint8_t row, uint8_t col, char character)
     const uint8_t *glyph = _GetGlyph(character);
     uint8_t index;
 
-    _SetCursor(row, (uint8_t)(col * BSP_OLED_CHAR_WIDTH));
+    if (_SetCursor(row, (uint8_t)(col * BSP_OLED_CHAR_WIDTH)) == 0U) {
+        return;
+    }
     for (index = 0U; index < 5U; index++) {
         data[index] = glyph[index];
     }
     data[5] = 0U;
-    if (_WriteData(data, sizeof(data)) == 0U) {
-        s_ready = 0U;
-    }
+    (void)_WriteData(data, sizeof(data));
 }
 
 static const uint8_t *_GetGlyph(char character)
@@ -261,6 +267,7 @@ static const uint8_t *_GetGlyph(char character)
     static const uint8_t blank[5] = {0U, 0U, 0U, 0U, 0U};
     static const uint8_t plus[5] = {0x08U, 0x08U, 0x3EU, 0x08U, 0x08U};
     static const uint8_t minus[5] = {0x08U, 0x08U, 0x08U, 0x08U, 0x08U};
+    static const uint8_t dot[5] = {0x00U, 0x60U, 0x60U, 0x00U, 0x00U};
     static const uint8_t digits[10][5] = {
         {0x3EU,0x51U,0x49U,0x45U,0x3EU}, {0x00U,0x42U,0x7FU,0x40U,0x00U},
         {0x42U,0x61U,0x51U,0x49U,0x46U}, {0x21U,0x41U,0x45U,0x4BU,0x31U},
@@ -296,11 +303,23 @@ static const uint8_t *_GetGlyph(char character)
     if (character == '-') {
         return minus;
     }
+    if (character == '.') {
+        return dot;
+    }
     return blank;
 }
 
 static void _ShowLineIfChanged(uint8_t row, const char *line)
 {
+    uint8_t pixels[BSP_OLED_TEXT_COLS * BSP_OLED_CHAR_WIDTH];
+    const uint8_t *glyph;
+    uint8_t firstChanged = 0U;
+    uint8_t lastChanged = (BSP_OLED_TEXT_COLS - 1U);
+    uint8_t charIndex;
+    uint8_t glyphIndex;
+    uint8_t pixelCount;
+    uint8_t sent;
+    uint8_t chunk;
     uint8_t index;
 
     if ((row >= BSP_OLED_TEXT_ROWS) || (line == 0)) {
@@ -308,17 +327,44 @@ static void _ShowLineIfChanged(uint8_t row, const char *line)
     }
 
     if ((s_lineValidMask & (uint8_t)(1U << row)) != 0U) {
-        for (index = 0U; index < BSP_OLED_TEXT_COLS; index++) {
-            if (s_lineCache[row][index] != line[index]) {
-                break;
-            }
+        while ((firstChanged < BSP_OLED_TEXT_COLS) &&
+               (s_lineCache[row][firstChanged] == line[firstChanged])) {
+            firstChanged++;
         }
-        if (index == BSP_OLED_TEXT_COLS) {
+        if (firstChanged == BSP_OLED_TEXT_COLS) {
             return;
+        }
+        while ((lastChanged > firstChanged) &&
+               (s_lineCache[row][lastChanged] == line[lastChanged])) {
+            lastChanged--;
         }
     }
 
-    BspOled_ShowText(row, 0U, line);
+    pixelCount = 0U;
+    for (charIndex = firstChanged; charIndex <= lastChanged; charIndex++) {
+        glyph = _GetGlyph(line[charIndex]);
+        for (glyphIndex = 0U; glyphIndex < 5U; glyphIndex++) {
+            pixels[pixelCount++] = glyph[glyphIndex];
+        }
+        pixels[pixelCount++] = 0U;
+    }
+
+    if (_SetCursor(row,
+            (uint8_t)(firstChanged * BSP_OLED_CHAR_WIDTH)) == 0U) {
+        return;
+    }
+    sent = 0U;
+    while (sent < pixelCount) {
+        chunk = (uint8_t)(pixelCount - sent);
+        if (chunk > BSP_OLED_DATA_CHUNK) {
+            chunk = BSP_OLED_DATA_CHUNK;
+        }
+        if (_WriteData(&pixels[sent], chunk) == 0U) {
+            return;
+        }
+        sent = (uint8_t)(sent + chunk);
+    }
+
     for (index = 0U; index < BSP_OLED_TEXT_COLS; index++) {
         s_lineCache[row][index] = line[index];
     }
@@ -352,10 +398,10 @@ static void _AppendText(char *line, uint8_t *pIndex, const char *text)
     }
 }
 
-static void _AppendUnsigned(char *line, uint8_t *pIndex, uint16_t value,
+static void _AppendUnsigned(char *line, uint8_t *pIndex, uint32_t value,
     uint8_t digits)
 {
-    uint16_t divisor = 1U;
+    uint32_t divisor = 1U;
     uint8_t digit;
 
     for (digit = 1U; digit < digits; digit++) {

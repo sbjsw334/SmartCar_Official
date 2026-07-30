@@ -4,4 +4,5 @@
 	<connection value="common/targetdb/connections/TIXDS110_Connection.xml"/>
 	<activeTargetConfiguration value="targetConfigs/MSPM0G3507.ccxml"/>
 	<deviceFamily value="TMS470"/>
+	<isTargetConfigurationManual value="false"/>
 </projectOptions>
