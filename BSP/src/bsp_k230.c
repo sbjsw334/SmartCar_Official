@@ -12,6 +12,7 @@ static volatile uint8_t s_rxTail = 0U;
 static char s_line[BSP_K230_LINE_SIZE];
 static uint8_t s_lineLength = 0U;
 static volatile BspK230Ball_t s_ball;
+static volatile BspK230Debug_t s_debug;
 static volatile uint16_t s_ageMs = BSP_K230_TIMEOUT_MS;
 
 static void _PushRx(uint8_t byte);
@@ -25,8 +26,12 @@ void BspK230_Init(void)
     s_rxHead = 0U;
     s_rxTail = 0U;
     s_lineLength = 0U;
-    s_ball.offsetPx = 0;
+    s_ball.offsetMm = 0;
     s_ball.valid = 0U;
+    s_debug.rxBytes = 0U;
+    s_debug.pollBytes = 0U;
+    s_debug.lines = 0U;
+    s_debug.parsed = 0U;
     s_ageMs = BSP_K230_TIMEOUT_MS;
 
     DL_UART_Main_clearInterruptStatus(UART_K230_INST,
@@ -37,6 +42,11 @@ void BspK230_Init(void)
 void BspK230_Task(void)
 {
     uint8_t byte;
+
+    while (DL_UART_Main_receiveDataCheck(UART_K230_INST, &byte)) {
+        s_debug.pollBytes++;
+        _PushRx(byte);
+    }
 
     while (_PopRx(&byte) != 0U) {
         _ProcessByte(byte);
@@ -64,10 +74,22 @@ void BspK230_GetBall(BspK230Ball_t *pBall)
     __enable_irq();
 }
 
+void BspK230_GetDebug(BspK230Debug_t *pDebug)
+{
+    if (pDebug == 0) {
+        return;
+    }
+
+    __disable_irq();
+    *pDebug = s_debug;
+    __enable_irq();
+}
+
 void UART_K230_INST_IRQHandler(void)
 {
     switch (DL_UART_Main_getPendingInterrupt(UART_K230_INST)) {
         case DL_UART_MAIN_IIDX_RX:
+            s_debug.rxBytes++;
             _PushRx((uint8_t)DL_UART_Main_receiveData(UART_K230_INST));
             break;
 
@@ -109,12 +131,14 @@ static void _ProcessByte(uint8_t byte)
     }
 
     if (byte == '\n') {
+        s_debug.lines++;
         s_line[s_lineLength] = '\0';
         if (_ParseBallLine(s_line, &position, &valid) != 0U) {
             __disable_irq();
-            s_ball.offsetPx = position;
+            s_ball.offsetMm = position;
             s_ageMs = 0U;
             s_ball.valid = valid;
+            s_debug.parsed++;
             __enable_irq();
         }
         s_lineLength = 0U;
@@ -174,11 +198,11 @@ static uint8_t _ParseBallLine(const char *line, int16_t *pPosition, uint8_t *pVa
 
 static int16_t _ClampPosition(int32_t position)
 {
-    if (position < BSP_K230_OFFSET_MIN_PX) {
-        return BSP_K230_OFFSET_MIN_PX;
+    if (position < BSP_K230_OFFSET_MIN_MM) {
+        return BSP_K230_OFFSET_MIN_MM;
     }
-    if (position > BSP_K230_OFFSET_MAX_PX) {
-        return BSP_K230_OFFSET_MAX_PX;
+    if (position > BSP_K230_OFFSET_MAX_MM) {
+        return BSP_K230_OFFSET_MAX_MM;
     }
     return (int16_t)position;
 }

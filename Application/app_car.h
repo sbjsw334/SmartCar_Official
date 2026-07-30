@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "msg_map.h"
+#include "ball_control.h"
 #include "trace_control.h"
 
 #define APP_CAR_CONTROL_PERIOD_MS (2U)
@@ -59,8 +60,9 @@ struct _AppCarDef {
     uint32_t ballStateMs;
     uint32_t routePulses;
     uint16_t finishLineMs;
+    uint16_t ballStableMs;
     int16_t ballTargetMm;
-    int16_t ballOffsetPx;
+    int16_t ballOffsetMm;
     int16_t leftSpeed;
     int16_t rightSpeed;
     int32_t leftCount;
@@ -74,6 +76,7 @@ struct _AppCarDef {
     volatile uint8_t timerRunning;
 
     TraceControl_t trace;
+    BallControl_t ballControl;
 };
 
 typedef struct {

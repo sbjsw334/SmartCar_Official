@@ -24,7 +24,7 @@ K230 UART_TX -> G3507 PA25 / UART3_RX
 K230 UART_RX <- G3507 PA26 / UART3_TX
 K230 GND     -> G3507 GND
 波特率       = 115200, 8N1
-协议         = B,<offset_px>,<valid>\n
+协议         = B,<offset_mm>,<valid>\n
 ```
 
 原表中的 `PA26 TX / PA27 RX` 无效：PA27 没有 UART RX 复用，因此 RX 已改为 PA25。
@@ -45,7 +45,7 @@ PA18 受 LaunchPad J15 跳线影响，装车前必须确认 BoosterPack 对应�
 ## 摆杆机构
 
 ```text
-LDX-218：PB20 输出 50 Hz PWM，中心脉宽 1500 us，软件安全范围 1100~1900 us
+LDX-218：PB20 输出 50 Hz PWM，中心脉宽 1600 us，软件安全范围 1100~1900 us
 ```
 
 舵机必须使用独立 6.0~8.4 V 电源，并与 MSPM0、K230 共地。PB20 只接舵机 PWM 信号；PA31、PA28 本题不使用。
