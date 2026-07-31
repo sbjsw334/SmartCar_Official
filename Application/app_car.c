@@ -373,10 +373,6 @@ static void _BallHoldTarget(AppCarDef *pCar)
 static void _EnterStopped(AppCarDef *pCar)
 {
     BspMotor_Stop();
-    if (pCar->mode == APP_CAR_MODE_TRACE_ONLY) {
-        BspK230_RecordStop();
-    }
-
     BspServo_Center();
     TraceControl_Init(&pCar->trace);
     TraceControl_SetBaseSpeed(&pCar->trace, _GetTraceSpeed(pCar->mode));
@@ -412,19 +408,12 @@ static void _EnterRunning(AppCarDef *pCar)
     pCar->pFatherState = _FatherRunning;
     BallControl_Reset(&pCar->ballControl);
     _ConfigureChildren(pCar);
-    if (pCar->mode == APP_CAR_MODE_TRACE_ONLY) {
-        BspK230_RecordStart();
-    }
     BspUart_Printf("[RUN] start mode=%u\n", (unsigned)pCar->mode);
 }
 
 static void _EnterFinished(AppCarDef *pCar)
 {
     BspMotor_Stop();
-    if (pCar->mode == APP_CAR_MODE_TRACE_ONLY) {
-        BspK230_RecordStop();
-    }
-
     pCar->leftCommand = 0;
     pCar->rightCommand = 0;
     pCar->timerRunning = 0U;
@@ -437,10 +426,6 @@ static void _EnterFinished(AppCarDef *pCar)
 static void _EnterFault(AppCarDef *pCar)
 {
     BspMotor_Stop();
-    if (pCar->mode == APP_CAR_MODE_TRACE_ONLY) {
-        BspK230_RecordStop();
-    }
-
     BspServo_Center();
     pCar->leftCommand = 0;
     pCar->rightCommand = 0;

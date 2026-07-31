@@ -12,7 +12,7 @@
 | 右编码器 | A / B | PB6 / PB7 |
 | 8 路红外循迹 | OUT1..OUT8 | PB0, PB4, PB15, PB16, PB17, PB18, PB19, PB24 |
 | OLED I2C | SCL / SDA | PB2 / PB3 |
-| K230 UART3 | G3507 TX / RX | PB12 / PA25 |
+| K230 UART3 | G3507 TX / RX | PA26 / PA25 |
 | 四按键 | START / MODE / PLUS / MINUS | PA18 / PA22 / PA24 / PA27 |
 | LDX-218 摆杆舵机 | PWM | PB20 |
 | PC 调试串口 | TX / RX | PA10 / PA11 |
@@ -21,13 +21,13 @@
 
 ```text
 K230 UART_TX -> G3507 PA25 / UART3_RX
-K230 UART_RX <- G3507 PB12 / UART3_TX
+K230 UART_RX <- G3507 PA26 / UART3_TX
 K230 GND     -> G3507 GND
 波特率       = 115200, 8N1
 协议         = B,<offset_mm>,<valid>\n
 ```
 
-录像控制 TX 改用板上可接出的 `PB12 / UART3_TX`，视觉数据 RX 使用 `PA25 / UART3_RX`。
+原表中的 `PA26 TX / PA27 RX` 无效：PA27 没有 UART RX 复用，因此 RX 已改为 PA25。
 
 ## 四按键
 

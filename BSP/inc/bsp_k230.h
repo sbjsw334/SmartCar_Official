@@ -25,7 +25,5 @@ void BspK230_Task(void);
 void BspK230_Task1ms(void);
 void BspK230_GetBall(BspK230Ball_t *pBall);
 void BspK230_GetDebug(BspK230Debug_t *pDebug);
-void BspK230_RecordStart(void);
-void BspK230_RecordStop(void);
 
 #endif /* _BSP_K230_H_ */

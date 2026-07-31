@@ -23,15 +23,9 @@ K230 协议：
 
 ```text
 B,<offset_mm>,<valid>\n
-REC,START\n               G3507 -> K230，第一问开始录像
-REC,STOP\n                G3507 -> K230，完成/停止/故障时结束录像
-R,REC,1\n                  K230 -> G3507，已收到开始命令
-R,REC,0\n                  K230 -> G3507，已收到停止命令
 ```
 
-录像命令未收到确认时每 200 ms 自动重发。录像文件和 HTTP 下载由 K230 端负责。
-
-`offset_mm` 是钢球相对 O 点的毫米偏差，左负右正。K230 接到 PB12/PA25 的 UART3，详见 `PINMAP.md`。
+`offset_mm` 是钢球相对 O 点的毫米偏差，左负右正。K230 接到 PA26/PA25 的 UART3，详见 `PINMAP.md`。
 
 ## 当前状态
 
