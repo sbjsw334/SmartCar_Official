@@ -218,13 +218,13 @@ UART1.peripheral.txPin.$assign = "PA10";
 UART1.txPinConfig.$name        = "ti_driverlib_gpio_UART0_TX";
 UART1.rxPinConfig.$name        = "ti_driverlib_gpio_UART0_RX";
 
-/* K230: G3507 PA26 TX -> K230 RX, PA25 RX <- K230 TX. */
+/* K230: G3507 PB12 TX -> K230 RX, PA25 RX <- K230 TX. */
 UART2.$name                    = "UART_K230";
 UART2.targetBaudRate           = 115200;
 UART2.enabledInterrupts        = ["RX"];
 UART2.peripheral.$assign       = "UART3";
 UART2.peripheral.rxPin.$assign = "PA25";
-UART2.peripheral.txPin.$assign = "PA26";
+UART2.peripheral.txPin.$assign = "PB12";
 UART2.txPinConfig.$name        = "ti_driverlib_gpio_K230_TX";
 UART2.rxPinConfig.$name        = "ti_driverlib_gpio_K230_RX";
 
