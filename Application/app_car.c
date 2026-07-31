@@ -8,7 +8,7 @@
 #include "bsp_uart.h"
 
 /* Track speeds: tune these four values at the field. */
-#define APP_CAR_TRACE_SPEED_H2           (26)       // 第二问速度
+#define APP_CAR_TRACE_SPEED_H2           (36)       // 第二问速度
 #define APP_CAR_TRACE_SPEED_H4           (32)       // 第四问速度
 #define APP_CAR_TRACE_SPEED_H5           (28)       // 第五问速度
 #define APP_CAR_TRACE_SPEED_H6           (26)       // 第六问速度
@@ -33,6 +33,7 @@
 #define APP_CAR_BALL_POSITIVE_MM          (50)
 #define APP_CAR_BALL_NEGATIVE_MM          (-50)
 #define APP_CAR_BALL_STABLE_ERROR_MM      (10)
+#define APP_CAR_BALL_STABLE_SPEED_MM_PER_S (60)
 #define APP_CAR_BALL_STABLE_MS            (250U)
 
 static void _Init(AppCarDef *pCar);
@@ -96,6 +97,7 @@ static void _Init(AppCarDef *pCar)
     }
 
     pCar->mode = APP_CAR_MODE_TRACE_ONLY;
+    pCar->uptimeMs = 0U;
     pCar->elapsedMs = 0U;
     pCar->routeStateMs = 0U;
     pCar->ballStateMs = 0U;
@@ -142,8 +144,11 @@ static void _Run(AppCarDef *pCar, MsgId_t msg)
 
 void AppCar_Tick1ms(AppCarDef *pCar)
 {
-    if ((pCar != 0) && (pCar->timerRunning != 0U)) {
-        pCar->elapsedMs++;
+    if (pCar != 0) {
+        pCar->uptimeMs++;
+        if (pCar->timerRunning != 0U) {
+            pCar->elapsedMs++;
+        }
     }
 }
 
@@ -555,7 +560,7 @@ static void _RunBallControl(AppCarDef *pCar, int16_t targetMm)
 {
     uint16_t pulseUs = BallControl_Update(&pCar->ballControl,
         targetMm, pCar->ballOffsetMm, pCar->ballFrameSeq,
-        pCar->ballValid);
+        pCar->uptimeMs, pCar->ballValid);
 
     BspServo_SetPulseUs(pulseUs);
 }
@@ -563,6 +568,7 @@ static void _RunBallControl(AppCarDef *pCar, int16_t targetMm)
 static uint8_t _IsBallStable(AppCarDef *pCar, int16_t targetMm)
 {
     int16_t errorMm;
+    int16_t speedMmPerSec;
 
     if (pCar->ballValid == 0U) {
         pCar->ballStableMs = 0U;
@@ -574,7 +580,13 @@ static uint8_t _IsBallStable(AppCarDef *pCar, int16_t targetMm)
         errorMm = (int16_t)-errorMm;
     }
 
-    if (errorMm <= APP_CAR_BALL_STABLE_ERROR_MM) {
+    speedMmPerSec = BallControl_GetSpeedMmPerSec(&pCar->ballControl);
+    if (speedMmPerSec < 0) {
+        speedMmPerSec = (int16_t)-speedMmPerSec;
+    }
+
+    if ((errorMm <= APP_CAR_BALL_STABLE_ERROR_MM) &&
+        (speedMmPerSec <= APP_CAR_BALL_STABLE_SPEED_MM_PER_S)) {
         if (pCar->ballStableMs < APP_CAR_BALL_STABLE_MS) {
             pCar->ballStableMs += APP_CAR_CONTROL_PERIOD_MS;
         }

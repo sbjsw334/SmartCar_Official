@@ -136,10 +136,12 @@ static void _ProcessByte(uint8_t byte)
         s_line[s_lineLength] = '\0';
         if (_ParseBallLine(s_line, &position, &valid) != 0U) {
             __disable_irq();
-            s_ball.frameSeq++;
-            s_ball.offsetMm = position;
-            s_ageMs = 0U;
-            s_ball.valid = valid;
+            if (valid != 0U) {
+                s_ball.frameSeq++;
+                s_ball.offsetMm = position;
+                s_ageMs = 0U;
+                s_ball.valid = 1U;
+            }
             s_debug.parsed++;
             __enable_irq();
         }

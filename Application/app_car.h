@@ -55,6 +55,7 @@ struct _AppCarDef {
     AppCarBallState_t ballState;
     AppCarMode_t mode;
 
+    volatile uint32_t uptimeMs;
     volatile uint32_t elapsedMs;
     uint32_t routeStateMs;
     uint32_t ballStateMs;
