@@ -62,6 +62,7 @@ struct _AppCarDef {
     uint32_t routePulses;
     uint16_t finishLineMs;
     uint16_t ballStableMs;
+    uint32_t ballStableFrameSeq;
     int16_t ballTargetMm;
     int16_t ballOffsetMm;
     uint32_t ballFrameSeq;

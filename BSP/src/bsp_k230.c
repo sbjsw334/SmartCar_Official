@@ -4,6 +4,7 @@
 
 #define BSP_K230_RX_BUFFER_SIZE   (64U)
 #define BSP_K230_LINE_SIZE        (24U)
+#define BSP_K230_SPIKE_REJECT_MM  (80)
 
 static volatile uint8_t s_rxBuffer[BSP_K230_RX_BUFFER_SIZE];
 static volatile uint8_t s_rxHead = 0U;
@@ -19,6 +20,7 @@ static void _PushRx(uint8_t byte);
 static uint8_t _PopRx(uint8_t *pByte);
 static void _ProcessByte(uint8_t byte);
 static uint8_t _ParseBallLine(const char *line, int16_t *pPosition, uint8_t *pValid);
+static uint8_t _IsSpikePosition(int16_t position);
 static int16_t _ClampPosition(int32_t position);
 
 void BspK230_Init(void)
@@ -136,7 +138,7 @@ static void _ProcessByte(uint8_t byte)
         s_line[s_lineLength] = '\0';
         if (_ParseBallLine(s_line, &position, &valid) != 0U) {
             __disable_irq();
-            if (valid != 0U) {
+            if ((valid != 0U) && (_IsSpikePosition(position) == 0U)) {
                 s_ball.frameSeq++;
                 s_ball.offsetMm = position;
                 s_ageMs = 0U;
@@ -198,6 +200,22 @@ static uint8_t _ParseBallLine(const char *line, int16_t *pPosition, uint8_t *pVa
     *pPosition = _ClampPosition(value);
     *pValid = (uint8_t)(line[index] == '1');
     return 1U;
+}
+
+static uint8_t _IsSpikePosition(int16_t position)
+{
+    int32_t diff;
+
+    if (s_ball.valid == 0U) {
+        return 0U;
+    }
+
+    diff = (int32_t)position - (int32_t)s_ball.offsetMm;
+    if (diff < 0) {
+        diff = -diff;
+    }
+
+    return (uint8_t)(diff > BSP_K230_SPIKE_REJECT_MM);
 }
 
 static int16_t _ClampPosition(int32_t position)

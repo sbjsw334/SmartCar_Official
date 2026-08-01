@@ -24,7 +24,7 @@
 #define APP_CAR_LAP_GATE_PULSES          \
     ((APP_CAR_LAP_EXPECTED_PULSES * APP_CAR_LAP_GATE_PERCENT) / 100U)
 #define APP_CAR_FINISH_CONFIRM_MS         (30U)
-#define APP_CAR_FINISH_FOLLOW_MS          (500U)     // 第二问 过线后继续循迹时间
+#define APP_CAR_FINISH_FOLLOW_MS          (350U)     // 第二问 过线后继续循迹时间
 #define APP_CAR_FINISH_SENSOR_MIN         (4U)
 
 #define APP_CAR_TARGET_MIN_MM             (-100)
@@ -32,9 +32,18 @@
 #define APP_CAR_BALL_CENTER_MM            (0)
 #define APP_CAR_BALL_POSITIVE_MM          (50)
 #define APP_CAR_BALL_NEGATIVE_MM          (-50)
-#define APP_CAR_BALL_STABLE_ERROR_MM      (10)
-#define APP_CAR_BALL_STABLE_SPEED_MM_PER_S (60)
-#define APP_CAR_BALL_STABLE_MS            (250U)
+#define APP_CAR_BALL_POSITIVE_CONTROL_MM  (53)
+#define APP_CAR_BALL_NEGATIVE_CONTROL_MM  (-58)
+#define APP_CAR_BALL_TARGET_POS_STEP_MM   (4)
+#define APP_CAR_BALL_TARGET_POS_PERIOD_MS (20U)
+#define APP_CAR_BALL_TARGET_NEG_STEP_MM   (5)
+#define APP_CAR_BALL_TARGET_NEG_PERIOD_MS (30U)
+#define APP_CAR_BALL_REACH_ERROR_MM       (10)
+#define APP_CAR_BALL_REACH_SPEED_MM_PER_S (70)
+#define APP_CAR_BALL_FINAL_ERROR_MM       (10)
+#define APP_CAR_BALL_FINAL_SPEED_MM_PER_S (35)
+#define APP_CAR_BALL_FINAL_STABLE_MS      (330U)
+#define APP_CAR_BALL_FRAME_MS             (33U)
 
 static void _Init(AppCarDef *pCar);
 static void _Run(AppCarDef *pCar, MsgId_t msg);
@@ -72,7 +81,11 @@ static void _RunChildren(AppCarDef *pCar);
 static void _SampleInputs(AppCarDef *pCar);
 static void _RunTraceControl(AppCarDef *pCar);
 static void _RunBallControl(AppCarDef *pCar, int16_t targetMm);
-static uint8_t _IsBallStable(AppCarDef *pCar, int16_t targetMm);
+static int16_t _StepBallTargetMm(AppCarDef *pCar, int16_t finalTargetMm);
+static uint8_t _IsBallReached(const AppCarDef *pCar, int16_t targetMm);
+static uint8_t _IsBallFinalStable(AppCarDef *pCar, int16_t targetMm);
+static void _PrintBallStageResult(const AppCarDef *pCar, const char *name,
+    int16_t targetMm);
 static uint8_t _IsFinishLine(uint8_t gray);
 static uint32_t _AbsCount(int32_t count);
 static void _PrintTelemetry(const AppCarDef *pCar);
@@ -104,6 +117,7 @@ static void _Init(AppCarDef *pCar)
     pCar->routePulses = 0U;
     pCar->finishLineMs = 0U;
     pCar->ballStableMs = 0U;
+    pCar->ballStableFrameSeq = 0U;
     pCar->ballTargetMm = 0;
     pCar->ballOffsetMm = 0;
     pCar->ballFrameSeq = 0U;
@@ -231,7 +245,9 @@ static void _FatherRunning(AppCarDef *pCar, MsgId_t msg)
         pCar->ballStateMs += APP_CAR_CONTROL_PERIOD_MS;
         _RunChildren(pCar);
     } else if (msg == MSG_TELEMETRY_200MS) {
-        /* Do not block the 2 ms control loop with UART while driving. */
+        if (pCar->mode == APP_CAR_MODE_BALL_STATIC) {
+            _PrintTelemetry(pCar);
+        }
     }
 }
 
@@ -340,7 +356,7 @@ static void _BallWaitVision(AppCarDef *pCar)
     }
 
     if (pCar->mode == APP_CAR_MODE_BALL_STATIC) {
-        pCar->ballTargetMm = APP_CAR_BALL_POSITIVE_MM;
+        pCar->ballTargetMm = pCar->ballOffsetMm;
         _SetBallState(pCar, APP_CAR_BALL_MOVE_POSITIVE);
     } else {
         _SetRouteState(pCar, APP_CAR_ROUTE_LEAVE_START);
@@ -350,21 +366,24 @@ static void _BallWaitVision(AppCarDef *pCar)
 
 static void _BallMovePositive(AppCarDef *pCar)
 {
-    pCar->ballTargetMm = APP_CAR_BALL_POSITIVE_MM;
-    _RunBallControl(pCar, APP_CAR_BALL_POSITIVE_MM);
+    int16_t targetMm = _StepBallTargetMm(pCar, APP_CAR_BALL_POSITIVE_CONTROL_MM);
+    _RunBallControl(pCar, targetMm);
 
-    if (_IsBallStable(pCar, APP_CAR_BALL_POSITIVE_MM) != 0U) {
-        pCar->ballTargetMm = APP_CAR_BALL_NEGATIVE_MM;
+    if ((targetMm == APP_CAR_BALL_POSITIVE_CONTROL_MM) &&
+        (_IsBallReached(pCar, APP_CAR_BALL_POSITIVE_MM) != 0U)) {
+        _PrintBallStageResult(pCar, "+50", APP_CAR_BALL_POSITIVE_MM);
         _SetBallState(pCar, APP_CAR_BALL_MOVE_NEGATIVE);
     }
 }
 
 static void _BallMoveNegative(AppCarDef *pCar)
 {
-    pCar->ballTargetMm = APP_CAR_BALL_NEGATIVE_MM;
-    _RunBallControl(pCar, APP_CAR_BALL_NEGATIVE_MM);
+    int16_t targetMm = _StepBallTargetMm(pCar, APP_CAR_BALL_NEGATIVE_CONTROL_MM);
+    _RunBallControl(pCar, targetMm);
 
-    if (_IsBallStable(pCar, APP_CAR_BALL_NEGATIVE_MM) != 0U) {
+    if ((targetMm == APP_CAR_BALL_NEGATIVE_CONTROL_MM) &&
+        (_IsBallFinalStable(pCar, APP_CAR_BALL_NEGATIVE_MM) != 0U)) {
+        _PrintBallStageResult(pCar, "-50", APP_CAR_BALL_NEGATIVE_MM);
         _SetBallState(pCar, APP_CAR_BALL_HOLD_TARGET);
         _EnterFinished(pCar);
     }
@@ -471,7 +490,7 @@ static void _SetBallState(AppCarDef *pCar, AppCarBallState_t state)
     pCar->ballState = state;
     pCar->ballStateMs = 0U;
     pCar->ballStableMs = 0U;
-    BallControl_Reset(&pCar->ballControl);
+    pCar->ballStableFrameSeq = pCar->ballFrameSeq;
 
     switch (state) {
         case APP_CAR_BALL_WAIT_VISION:
@@ -565,13 +584,50 @@ static void _RunBallControl(AppCarDef *pCar, int16_t targetMm)
     BspServo_SetPulseUs(pulseUs);
 }
 
-static uint8_t _IsBallStable(AppCarDef *pCar, int16_t targetMm)
+static int16_t _StepBallTargetMm(AppCarDef *pCar, int16_t finalTargetMm)
+{
+    int16_t targetMm = pCar->ballTargetMm;
+    int16_t stepMm;
+    uint16_t periodMs;
+
+    if (targetMm == finalTargetMm) {
+        return targetMm;
+    }
+
+    if (targetMm < finalTargetMm) {
+        stepMm = APP_CAR_BALL_TARGET_POS_STEP_MM;
+        periodMs = APP_CAR_BALL_TARGET_POS_PERIOD_MS;
+    } else {
+        stepMm = APP_CAR_BALL_TARGET_NEG_STEP_MM;
+        periodMs = APP_CAR_BALL_TARGET_NEG_PERIOD_MS;
+    }
+
+    if ((pCar->ballStateMs % periodMs) != 0U) {
+        return targetMm;
+    }
+
+    if (targetMm < finalTargetMm) {
+        targetMm = (int16_t)(targetMm + stepMm);
+        if (targetMm > finalTargetMm) {
+            targetMm = finalTargetMm;
+        }
+    } else if (targetMm > finalTargetMm) {
+        targetMm = (int16_t)(targetMm - stepMm);
+        if (targetMm < finalTargetMm) {
+            targetMm = finalTargetMm;
+        }
+    }
+
+    pCar->ballTargetMm = targetMm;
+    return targetMm;
+}
+
+static uint8_t _IsBallReached(const AppCarDef *pCar, int16_t targetMm)
 {
     int16_t errorMm;
     int16_t speedMmPerSec;
 
-    if (pCar->ballValid == 0U) {
-        pCar->ballStableMs = 0U;
+    if ((pCar == 0) || (pCar->ballValid == 0U)) {
         return 0U;
     }
 
@@ -585,16 +641,61 @@ static uint8_t _IsBallStable(AppCarDef *pCar, int16_t targetMm)
         speedMmPerSec = (int16_t)-speedMmPerSec;
     }
 
-    if ((errorMm <= APP_CAR_BALL_STABLE_ERROR_MM) &&
-        (speedMmPerSec <= APP_CAR_BALL_STABLE_SPEED_MM_PER_S)) {
-        if (pCar->ballStableMs < APP_CAR_BALL_STABLE_MS) {
-            pCar->ballStableMs += APP_CAR_CONTROL_PERIOD_MS;
+    return (uint8_t)((errorMm <= APP_CAR_BALL_REACH_ERROR_MM) &&
+        (speedMmPerSec <= APP_CAR_BALL_REACH_SPEED_MM_PER_S));
+}
+
+static uint8_t _IsBallFinalStable(AppCarDef *pCar, int16_t targetMm)
+{
+    int16_t errorMm;
+    int16_t speedMmPerSec;
+
+    if ((pCar == 0) || (pCar->ballValid == 0U)) {
+        pCar->ballStableMs = 0U;
+        return 0U;
+    }
+
+    if (pCar->ballFrameSeq == pCar->ballStableFrameSeq) {
+        return (uint8_t)(pCar->ballStableMs >= APP_CAR_BALL_FINAL_STABLE_MS);
+    }
+    pCar->ballStableFrameSeq = pCar->ballFrameSeq;
+
+    errorMm = (int16_t)(targetMm - pCar->ballOffsetMm);
+    if (errorMm < 0) {
+        errorMm = (int16_t)-errorMm;
+    }
+
+    speedMmPerSec = BallControl_GetSpeedMmPerSec(&pCar->ballControl);
+    if (speedMmPerSec < 0) {
+        speedMmPerSec = (int16_t)-speedMmPerSec;
+    }
+
+    if ((errorMm <= APP_CAR_BALL_FINAL_ERROR_MM) &&
+        (speedMmPerSec <= APP_CAR_BALL_FINAL_SPEED_MM_PER_S)) {
+        if (pCar->ballStableMs < APP_CAR_BALL_FINAL_STABLE_MS) {
+            pCar->ballStableMs += APP_CAR_BALL_FRAME_MS;
         }
     } else {
         pCar->ballStableMs = 0U;
     }
 
-    return (uint8_t)(pCar->ballStableMs >= APP_CAR_BALL_STABLE_MS);
+    return (uint8_t)(pCar->ballStableMs >= APP_CAR_BALL_FINAL_STABLE_MS);
+}
+
+static void _PrintBallStageResult(const AppCarDef *pCar, const char *name,
+    int16_t targetMm)
+{
+    int16_t errorMm = (int16_t)(targetMm - pCar->ballOffsetMm);
+    int16_t speedMmPerSec = BallControl_GetSpeedMmPerSec(&pCar->ballControl);
+
+    BspUart_Printf("[H3] %s ok t=%lu ms stage=%lu ms target=%d ball=%d err=%d speed=%d\n",
+        name,
+        (unsigned long)pCar->elapsedMs,
+        (unsigned long)pCar->ballStateMs,
+        (int)targetMm,
+        (int)pCar->ballOffsetMm,
+        (int)errorMm,
+        (int)speedMmPerSec);
 }
 
 static uint8_t _IsFinishLine(uint8_t gray)

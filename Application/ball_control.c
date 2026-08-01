@@ -1,89 +1,194 @@
 #include "ball_control.h"
 
-/* Outer position P: position error -> target ball speed. */
-// 外环：位置环（比例控制）
-// 作用：根据球的位置偏差，计算出“球应该以多快的速度滚向目标点”
-// 输入：目标位置 - 实际位置（mm）
-// 输出：目标速度（mm/s）
+/*
+ * H3 钢球控制调参面板
+ *
+ * 控制结构：
+ *   位置环 P  -> 目标速度
+ *   速度环 P  -> 舵机脉宽偏移量
+ *   补偿机制  -> 位置增益 + 方向增益 + 近目标软区
+ *
+ * 注意：这里先用纯P控制，不加I和D。
+ *       因为球-板系统本身已经包含舵机角度 -> 加速度 -> 速度 -> 位置的积分链。
+ */
 
+/* ==================== 1) 外环：位置环P控制 ==================== */
+// 作用：位置误差(mm) -> 目标速度(mm/s)
 #define BALL_CONTROL_OUTER_KP_NUM                  (3)
-// 外环比例系数的分子 = 3
-// 配合分母组成 KP = 3/2 = 1.5
-// 含义：球偏离1mm，就命令它以 1.5mm/s 的速度滚回去
-// 调大：归位快但易震荡；调小：反应慢但稳
-
 #define BALL_CONTROL_OUTER_KP_DEN                  (2)
-// 外环比例系数的分母 = 2
-// 和分子一起构成 KP = 3/2 = 1.5（用分数形式避免浮点误差）
+// 外环比例系数 KP = 3/2 = 1.5
+// 含义：球偏离目标 1mm，就命令它以 1.5mm/s 的速度滚回去
+// 调大：归位更快，但容易冲过头/震荡
+// 调小：归位更慢，但更稳定
 
-#define BALL_CONTROL_TARGET_SPEED_LIMIT_MM_PER_S   (180)
-// 外环输出限幅：目标速度最大 ±180 mm/s
-// 防止算出的目标速度太大，导致球瞬间飞出去失控
-// 如果球总冲过头，减小这个值；如果反应太慢，增大它
+#define BALL_CONTROL_TARGET_SPEED_LIMIT_MM_PER_S   (150)
+// 目标速度限幅：±150 mm/s
+// 调大：远距离移动更快，反应更迅速
+// 调小：靠近目标时更温柔，减少冲过头
 
 
-/* Inner speed P: speed error -> servo pulse offset. No I or D. */
-// 内环：速度环（比例控制，没有积分I和微分D）
-// 作用：根据速度偏差，计算出“舵机应该偏转多少微秒”
-// 输入：目标速度 - 实际速度（mm/s）
-// 输出：舵机脉宽偏移量（微秒）
-
+/* ==================== 2) 内环：速度环P控制 ==================== */
+// 作用：速度误差(mm/s) -> 舵机脉宽偏移量(us)
 #define BALL_CONTROL_INNER_KP_POS_NUM              (4)
-// 正向内环比例系数的分子 = 4
-// 用于球在负半区、需要往正方向回到目标点时
-// 这边实测存在静摩擦/机构死区，所以给更大的P
+// 正方向（球向右/正方向滚）速度环增益
+// 如果球向正方向推不动，增大此值
 
-#define BALL_CONTROL_INNER_KP_NEG_NUM              (2)
-// 负向内环比例系数的分子 = 2
-// 用于球在正半区、需要往负方向回到目标点时
-// 这边已经能及时回调，所以先保持原来的力度
+#define BALL_CONTROL_INNER_KP_NEG_NUM              (5)
+// 负方向（球向左/负方向滚）速度环增益
+// 如果从 +50mm 回 -50mm 时停在 -30mm 推不动，增大此值
 
 #define BALL_CONTROL_INNER_KP_DEN                  (1)
-// 内环比例系数的分母 = 1
-// 和正/负方向分子一起构成对应方向的 KP
+// 内环比例系数的分母（正反向共用）
+// 所以正向增益 = 4/1 = 4，负向增益 = 5/1 = 5
 
-#define BALL_CONTROL_INNER_OUTPUT_POS_LIMIT_US     (260)
-// 正向内环输出限幅：最大 +260 微秒
-// 本机构正向回调偏弱，所以允许更大的正向舵机偏移
+#define BALL_CONTROL_OUTPUT_POS_LIMIT_US           (220)
+// 正方向最大舵机偏移量：+220 μs
+// 如果正方向冲过头，减小此值
 
-#define BALL_CONTROL_INNER_OUTPUT_NEG_LIMIT_US     (180)
-// 负向内环输出限幅：最大 -180 微秒
-// 负向已经能回调，先不继续加大，避免另一边过冲
-
-#define BALL_CONTROL_POSITIVE_MIN_OUTPUT_US        (90)
-// 正向最小动作量：当需要往正方向回调时，至少给 +90 微秒
-// 用来克服 -30mm 到 0mm 附近调不动的静摩擦/死区
-// 如果接近0点开始来回抖，可以把它降到 60~70
+#define BALL_CONTROL_OUTPUT_NEG_LIMIT_US           (230)
+// 负方向最大舵机偏移量：-230 μs
+// 如果负方向冲过头，减小此值
 
 
+/* ==================== 3) 最小输出（克服静摩擦） ==================== */
+// 作用：当偏差较大时，即使算法算出的输出很小，也强制给一个最小推力
+#define BALL_CONTROL_MIN_OUTPUT_ENABLE_ERROR_MM    (6)
+// 最小输出启用阈值：|偏差| > 6mm 时才启用
+// 调大：在更大的范围内都会给最小推力
+// 调小：只在更远的距离才给最小推力
+
+#define BALL_CONTROL_MIN_OUTPUT_POS_US             (90)
+// 正方向最小推力：+90 μs
+// 作用：当球从 -30mm 向 0mm 移动时，如果推不动就增大此值
+// 如果推过头（直接冲过0），就减小此值
+
+#define BALL_CONTROL_MIN_OUTPUT_NEG_US             (70)
+// 负方向最小推力：-70 μs
+// 作用：当球从 +50mm 向 -50mm 移动时，如果停在 -30mm 推不动就增大此值
+// 如果直接冲过 -50mm，就减小此值
+
+
+/* ==================== 4) 位置增益补偿（机械不对称补偿） ==================== */
+// 背景：舵机安装在 +78/+79mm 位置，导致：
+//       球在正方向时舵机力矩大（少给力）
+//       球在负方向时舵机力矩小（多给力）
+#define BALL_CONTROL_POS_STRONG_MM                 (80)
+#define BALL_CONTROL_NEG_WEAK_MM                   (-80)
+// 正强区边界：+80mm，负弱区边界：-80mm
+
+#define BALL_CONTROL_GAIN_FAR_POS_PERCENT          (70)
+// 球在 +80mm 以外（正远端）：舵机力矩最大，输出衰减到 70%
+// 如果 +100mm 附近拉不回来，增大此值（70→80）
+// 如果 +100mm 附近太猛，减小此值（70→60）
+
+#define BALL_CONTROL_GAIN_MID_POS_PERCENT          (90)
+// 球在 0~+80mm（正中段）：舵机力矩较强，输出衰减到 90%
+// 如果正半区反应慢，增大此值（90→100）
+// 如果正半区来回晃，减小此值（90→80）
+
+#define BALL_CONTROL_GAIN_MID_NEG_PERCENT          (135)
+// 球在 -80~0mm（负中段）：舵机力矩较弱，输出增强到 135%
+// 如果负半区回调慢、推不动，增大此值（135→145）
+// 如果负半区来回晃，减小此值（135→125）
+
+#define BALL_CONTROL_GAIN_FAR_NEG_PERCENT          (140)
+// 球在 -80mm 以外（负远端）：舵机力矩最弱，输出增强到 140%
+// 如果 -80~-115mm 拉不回来，增大此值（140→150）
+// 如果 -80~-115mm 冲太多，减小此值（140→130）
+
+
+/* ==================== 5) 近目标软控制 ==================== */
+// 作用：当球接近目标时，削弱控制，防止震荡，实现平稳收敛
+#define BALL_CONTROL_DEAD_ZONE_MM                  (5)
+// 死区：|偏差| ≤ 5mm 且速度很慢时，输出强制为0
+// 如果目标附近一直小抖，增大此值（5→6/7）
+// 如果停得太早（误差偏大），减小此值（5→4/3）
+
+#define BALL_CONTROL_DEAD_ZONE_SPEED_MM_PER_S      (20)
+// 死区速度条件：|速度| ≤ 20mm/s 才进入死区
+// 如果目标附近还在抖，增大此值（20→30）
+// 如果进目标时刹不住，减小此值（20→10）
+
+#define BALL_CONTROL_SOFT_ZONE_MM                  (12)
+// 软区范围：|偏差| ≤ 12mm 进入软区
+// 调大：更早开始温柔控制（更平滑）
+// 调小：更晚开始温柔控制（响应更快）
+
+#define BALL_CONTROL_SOFT_ZONE_GAIN_PERCENT        (70)
+// 软区输出比例：输出衰减到 70%
+// 如果接近目标但不收敛，增大此值（70→80）
+// 如果接近目标还冲来冲去，减小此值（70→60）
+
+#define BALL_CONTROL_SOFT_ZONE_LIMIT_US            (110)
+// 软区最大输出：±110 μs
+// 如果近目标推不动，增大此值（110→130）
+// 如果近目标晃幅大，减小此值（110→90）
+
+
+/* ==================== 6) 舵机输出变化率限制 ==================== */
+#define BALL_CONTROL_OUTPUT_STEP_LIMIT_US          (70)
+// 每帧（每次视觉数据更新）舵机脉宽最大变化量：±70 μs
+// 调小：控制更平滑，但响应更慢（有延迟）
+// 调大：响应更快，但更容易抖动/震荡
+// 如果舵机突然猛打、球被甩出去，减小此值
+
+
+/* ==================== 7) 输入安全与方向 ==================== */
 #define BALL_CONTROL_MEASURED_SPEED_LIMIT_MM_PER_S (800)
-// 速度测量值上限：±800 mm/s
-// 如果计算出的球速超过这个范围，就截断为 +800 或 -800 mm/s
-// 防止偶尔的跳变数据把舵机带飞
-
+// 速度测量上限：±800 mm/s
+// 如果传感器测出的速度超过此值，视为噪声/干扰，直接忽略
+// 防止异常数据导致失控
 
 #define BALL_CONTROL_SAMPLE_MIN_MS                 (10U)
-// 两个有效视觉帧用于测速的最小间隔：10 毫秒
-// 如果间隔小于 10ms，认为这次速度估计不可靠，将实际速度暂时置为0
-// 外环和内环仍会继续计算，并不是跳过整次控制
-
+// 最小控制周期：10ms
+// 如果两次控制间隔 <10ms，说明调用太频繁，不进行速度计算
+// 原因：舵机响应有限，太快了来不及动作
 
 #define BALL_CONTROL_SAMPLE_MAX_MS                 (150U)
-// 两个有效视觉帧用于测速的最大间隔：150 毫秒
-// 如果间隔超过 150ms，说明视觉曾长时间停顿，旧速度已经没有参考意义
-// 此时将实际速度暂时置为0，并不会把采样间隔强制改成150ms
-
+// 最大控制周期：150ms
+// 如果两次控制间隔 >150ms，说明程序卡顿或丢帧
+// 强制截断到150ms，防止速度计算数值爆炸
 
 #define BALL_CONTROL_SERVO_DIRECTION               (1)
-// 舵机转向方向系数
+// 舵机方向系数
 // = 1：正向控制（误差越大舵机正向偏转）
-// = -1：反向控制（如果舵机装反了，改成 -1 就能修正，不用重写代码）
-// 调试时如果发现球往反方向跑，把这个 1 改成 -1 就解决了
+// = -1：反向控制（如果舵机装反了，改成 -1 就能修正）
+// 如果球往两个方向都远离目标，就把 1 改成 -1
+
+
+/* ==================== 调参顺序建议 ====================
+ *
+ * 第一步：调"能不能到目标"
+ *   到不了 -50mm：调大 GAIN_MID_NEG_PERCENT 或 MIN_OUTPUT_NEG_US
+ *   到不了 +50mm：调大 GAIN_MID_POS_PERCENT 或 MIN_OUTPUT_POS_US
+ *
+ * 第二步：调"目标附近稳不稳"
+ *   接近目标时来回冲：降低 SOFT_ZONE_GAIN_PERCENT (70→60)
+ *   还冲：降低 SOFT_ZONE_LIMIT_US (120→100)
+ *
+ * 第三步：调"极近距离小抖"
+ *   小范围抖：增大 DEAD_ZONE_MM (5→6)
+ *   停得太早：减小 DEAD_ZONE_MM (5→4)
+ *
+ * 第四步（最后动这两个）：
+ *   BALL_CONTROL_OUTER_KP_NUM/DEN：整体太慢→增大，整体太冲→减小
+ *   BALL_CONTROL_TARGET_SPEED_LIMIT：整体响应慢→增大，容易冲过头→减小
+ * ==================================================== */
+
+
 
 static uint16_t _LimitPulse(int32_t pulseUs);
 static int16_t _LimitSigned(int32_t value, int16_t limit);
-static int16_t _CalcInnerOutputUs(int16_t positionErrorMm,
-    int16_t speedErrorMmPerSec);
+static int16_t _Abs16(int16_t value);
+static int16_t _ScalePercent(int16_t value, int16_t percent);
+static int16_t _GetPositionGainPercent(int16_t ballMm);
+static int16_t _ApplyMinimumOutput(int16_t outputUs, int16_t errorMm);
+static int16_t _ApplyNearTargetControl(int16_t outputUs, int16_t errorMm,
+    int16_t ballSpeedMmPerSec);
+static int16_t _ApplyOutputStepLimit(const BallControl_t *pControl,
+    int16_t outputUs);
+static int16_t _CalcInnerOutputUs(const BallControl_t *pControl,
+    int16_t positionErrorMm, int16_t ballMm, int16_t speedErrorMmPerSec);
 
 void BallControl_Init(BallControl_t *pControl)
 {
@@ -150,7 +255,8 @@ uint16_t BallControl_Update(BallControl_t *pControl,
 
     speedErrorMmPerSec = (int16_t)(
         pControl->targetSpeedMmPerSec - pControl->ballSpeedMmPerSec);
-    pulseOffsetUs = _CalcInnerOutputUs(positionErrorMm, speedErrorMmPerSec);
+    pulseOffsetUs = _CalcInnerOutputUs(pControl, positionErrorMm, ballMm,
+        speedErrorMmPerSec);
 
     pulseUs = (int32_t)BSP_SERVO_PULSE_CENTER_US +
         ((int32_t)BALL_CONTROL_SERVO_DIRECTION * pulseOffsetUs);
@@ -169,6 +275,129 @@ int16_t BallControl_GetSpeedMmPerSec(const BallControl_t *pControl)
     return (pControl == 0) ? 0 : pControl->ballSpeedMmPerSec;
 }
 
+static int16_t _CalcInnerOutputUs(const BallControl_t *pControl,
+    int16_t positionErrorMm, int16_t ballMm, int16_t speedErrorMmPerSec)
+{
+    int32_t outputUs;
+
+    if (speedErrorMmPerSec >= 0) {
+        outputUs =
+            ((int32_t)speedErrorMmPerSec * BALL_CONTROL_INNER_KP_POS_NUM) /
+            BALL_CONTROL_INNER_KP_DEN;
+        outputUs = _LimitSigned(outputUs, BALL_CONTROL_OUTPUT_POS_LIMIT_US);
+    } else {
+        outputUs =
+            ((int32_t)speedErrorMmPerSec * BALL_CONTROL_INNER_KP_NEG_NUM) /
+            BALL_CONTROL_INNER_KP_DEN;
+        outputUs = _LimitSigned(outputUs, BALL_CONTROL_OUTPUT_NEG_LIMIT_US);
+    }
+
+    outputUs = _ScalePercent((int16_t)outputUs,
+        _GetPositionGainPercent(ballMm));
+    outputUs = _ApplyMinimumOutput((int16_t)outputUs, positionErrorMm);
+    if (outputUs > 0) {
+        outputUs = _LimitSigned(outputUs, BALL_CONTROL_OUTPUT_POS_LIMIT_US);
+    } else if (outputUs < 0) {
+        outputUs = _LimitSigned(outputUs, BALL_CONTROL_OUTPUT_NEG_LIMIT_US);
+    }
+    outputUs = _ApplyNearTargetControl((int16_t)outputUs, positionErrorMm,
+        (pControl == 0) ? 0 : pControl->ballSpeedMmPerSec);
+    outputUs = _ApplyOutputStepLimit(pControl, (int16_t)outputUs);
+
+    return (int16_t)outputUs;
+}
+
+static int16_t _ApplyMinimumOutput(int16_t outputUs, int16_t errorMm)
+{
+    int16_t absError = _Abs16(errorMm);
+
+    if (absError <= BALL_CONTROL_MIN_OUTPUT_ENABLE_ERROR_MM) {
+        return outputUs;
+    }
+
+    if ((outputUs > 0) && (outputUs < BALL_CONTROL_MIN_OUTPUT_POS_US)) {
+        return BALL_CONTROL_MIN_OUTPUT_POS_US;
+    }
+    if ((outputUs < 0) && (outputUs > -BALL_CONTROL_MIN_OUTPUT_NEG_US)) {
+        return (int16_t)-BALL_CONTROL_MIN_OUTPUT_NEG_US;
+    }
+
+    return outputUs;
+}
+
+static int16_t _ApplyNearTargetControl(int16_t outputUs, int16_t errorMm,
+    int16_t ballSpeedMmPerSec)
+{
+    int16_t absError = _Abs16(errorMm);
+    int16_t absSpeed = _Abs16(ballSpeedMmPerSec);
+
+    if ((absError <= BALL_CONTROL_DEAD_ZONE_MM) &&
+        (absSpeed <= BALL_CONTROL_DEAD_ZONE_SPEED_MM_PER_S)) {
+        return 0;
+    }
+
+    if (absError <= BALL_CONTROL_SOFT_ZONE_MM) {
+        outputUs = _ScalePercent(outputUs, BALL_CONTROL_SOFT_ZONE_GAIN_PERCENT);
+        outputUs = _LimitSigned(outputUs, BALL_CONTROL_SOFT_ZONE_LIMIT_US);
+    }
+
+    return outputUs;
+}
+
+static int16_t _ApplyOutputStepLimit(const BallControl_t *pControl,
+    int16_t outputUs)
+{
+    int16_t lastOutputUs;
+    int16_t deltaUs;
+
+    if ((pControl == 0) || (pControl->hasFrame == 0U)) {
+        return outputUs;
+    }
+
+    lastOutputUs = (int16_t)(
+        (int32_t)pControl->lastPulseUs - (int32_t)BSP_SERVO_PULSE_CENTER_US);
+    if (BALL_CONTROL_SERVO_DIRECTION < 0) {
+        lastOutputUs = (int16_t)-lastOutputUs;
+    }
+
+    deltaUs = (int16_t)(outputUs - lastOutputUs);
+    if (deltaUs > BALL_CONTROL_OUTPUT_STEP_LIMIT_US) {
+        return (int16_t)(lastOutputUs + BALL_CONTROL_OUTPUT_STEP_LIMIT_US);
+    }
+    if (deltaUs < -BALL_CONTROL_OUTPUT_STEP_LIMIT_US) {
+        return (int16_t)(lastOutputUs - BALL_CONTROL_OUTPUT_STEP_LIMIT_US);
+    }
+
+    return outputUs;
+}
+
+static int16_t _GetPositionGainPercent(int16_t ballMm)
+{
+    if (ballMm >= BALL_CONTROL_POS_STRONG_MM) {
+        return BALL_CONTROL_GAIN_FAR_POS_PERCENT;
+    }
+    if (ballMm >= 0) {
+        return BALL_CONTROL_GAIN_MID_POS_PERCENT;
+    }
+    if (ballMm <= BALL_CONTROL_NEG_WEAK_MM) {
+        return BALL_CONTROL_GAIN_FAR_NEG_PERCENT;
+    }
+    return BALL_CONTROL_GAIN_MID_NEG_PERCENT;
+}
+
+static int16_t _ScalePercent(int16_t value, int16_t percent)
+{
+    return (int16_t)(((int32_t)value * (int32_t)percent) / 100L);
+}
+
+static int16_t _Abs16(int16_t value)
+{
+    if (value < 0) {
+        return (int16_t)-value;
+    }
+    return value;
+}
+
 static int16_t _LimitSigned(int32_t value, int16_t limit)
 {
     if (value < -(int32_t)limit) {
@@ -178,34 +407,6 @@ static int16_t _LimitSigned(int32_t value, int16_t limit)
         return limit;
     }
     return (int16_t)value;
-}
-
-static int16_t _CalcInnerOutputUs(int16_t positionErrorMm,
-    int16_t speedErrorMmPerSec)
-{
-    int32_t outputUs;
-
-    if (speedErrorMmPerSec >= 0) {
-        outputUs =
-            ((int32_t)speedErrorMmPerSec * BALL_CONTROL_INNER_KP_POS_NUM) /
-            BALL_CONTROL_INNER_KP_DEN;
-        outputUs = _LimitSigned(outputUs,
-            BALL_CONTROL_INNER_OUTPUT_POS_LIMIT_US);
-
-        if ((positionErrorMm > 3) &&
-            (outputUs > 0) &&
-            (outputUs < BALL_CONTROL_POSITIVE_MIN_OUTPUT_US)) {
-            outputUs = BALL_CONTROL_POSITIVE_MIN_OUTPUT_US;
-        }
-    } else {
-        outputUs =
-            ((int32_t)speedErrorMmPerSec * BALL_CONTROL_INNER_KP_NEG_NUM) /
-            BALL_CONTROL_INNER_KP_DEN;
-        outputUs = _LimitSigned(outputUs,
-            BALL_CONTROL_INNER_OUTPUT_NEG_LIMIT_US);
-    }
-
-    return (int16_t)outputUs;
 }
 
 static uint16_t _LimitPulse(int32_t pulseUs)
