@@ -23,6 +23,8 @@ typedef enum {
     APP_CAR_ROUTE_LEAVE_START,
     APP_CAR_ROUTE_TRACKING,
     APP_CAR_ROUTE_FINISH_ACTION,
+    APP_CAR_ROUTE_FINISH_BRAKE,
+    APP_CAR_ROUTE_FINISH_ALIGN,
     APP_CAR_ROUTE_COMPLETE,
 } AppCarRouteState_t;
 
@@ -61,9 +63,15 @@ struct _AppCarDef {
     uint32_t ballStateMs;
     uint32_t routePulses;
     uint16_t finishLineMs;
+    uint16_t finishAlignStableMs;
+    int32_t imuLapYawCd;
+    int16_t imuYawCd;
+    int16_t imuLastYawCd;
+    uint32_t imuSampleSeq;
     uint16_t ballStableMs;
     uint32_t ballStableFrameSeq;
     int16_t ballTargetMm;
+    int16_t lastBallTargetMm;   /* 上一帧目标，用于判断爬坡是否结束 */
     int16_t ballOffsetMm;
     uint32_t ballFrameSeq;
     int16_t leftSpeed;
@@ -75,6 +83,9 @@ struct _AppCarDef {
     int8_t traceTurn;
     uint8_t traceState;
     uint8_t ballValid;
+    uint8_t imuValid;
+    uint8_t imuOnline;
+    uint8_t imuHasLastYaw;
     uint8_t gray;
     volatile uint8_t timerRunning;
 

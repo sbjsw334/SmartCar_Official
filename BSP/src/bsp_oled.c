@@ -28,6 +28,8 @@ static void _AppendText(char *line, uint8_t *pIndex, const char *text);
 static void _AppendUnsigned(char *line, uint8_t *pIndex, uint32_t value,
     uint8_t digits);
 static void _AppendSigned3(char *line, uint8_t *pIndex, int16_t value);
+static void _ShowH2DebugStatus(const BspOledStatusView_t *pView,
+    const char *fatherName);
 static char _HexDigit(uint8_t value);
 
 void BspOled_Init(void)
@@ -111,6 +113,11 @@ void BspOled_ShowStatus(const BspOledStatusView_t *pView)
         fatherName = fatherNames[pView->fatherState];
     }
 
+    if (pView->mode == 0U) {
+        _ShowH2DebugStatus(pView, fatherName);
+        return;
+    }
+
     _ClearLine(line);
     index = 0U;
     _AppendChar(line, &index, 'H');
@@ -159,6 +166,76 @@ void BspOled_ShowStatus(const BspOledStatusView_t *pView)
     _AppendText(line, &index, "GRAY ");
     _AppendChar(line, &index, _HexDigit((uint8_t)(pView->gray >> 4)));
     _AppendChar(line, &index, _HexDigit(pView->gray));
+    _ShowLineIfChanged(5U, line);
+}
+
+static void _ShowH2DebugStatus(const BspOledStatusView_t *pView,
+    const char *fatherName)
+{
+    static const char *const waitNames[] = {
+        "OK", "ENC", "IMU", "LINE",
+    };
+    char line[BSP_OLED_TEXT_COLS + 1U];
+    uint8_t index;
+    uint32_t elapsedSeconds;
+    uint16_t elapsedHundredths;
+    const char *waitName = "OK";
+
+    if (pView->h2WaitCode <
+        (uint8_t)(sizeof(waitNames) / sizeof(waitNames[0]))) {
+        waitName = waitNames[pView->h2WaitCode];
+    }
+
+    _ClearLine(line);
+    index = 0U;
+    _AppendText(line, &index, "H2  ");
+    _AppendText(line, &index, fatherName);
+    _ShowLineIfChanged(0U, line);
+
+    _ClearLine(line);
+    index = 0U;
+    elapsedSeconds = pView->elapsedMs / 1000U;
+    if (elapsedSeconds > 9999U) {
+        elapsedSeconds = 9999U;
+    }
+    _AppendText(line, &index, "TIME ");
+    _AppendUnsigned(line, &index, elapsedSeconds, 4U);
+    _AppendChar(line, &index, '.');
+    elapsedHundredths = (uint16_t)((pView->elapsedMs % 1000U) / 10U);
+    _AppendUnsigned(line, &index, elapsedHundredths, 2U);
+    _AppendText(line, &index, " S");
+    _ShowLineIfChanged(1U, line);
+
+    _ClearLine(line);
+    index = 0U;
+    _AppendText(line, &index, "LAP ");
+    _AppendUnsigned(line, &index, pView->h2RoutePercent, 3U);
+    _AppendText(line, &index, " P");
+    _ShowLineIfChanged(2U, line);
+
+    _ClearLine(line);
+    index = 0U;
+    _AppendText(line, &index, "YAW ");
+    _AppendUnsigned(line, &index, pView->h2YawDeg, 3U);
+    _AppendText(line, &index, " D");
+    _ShowLineIfChanged(3U, line);
+
+    _ClearLine(line);
+    index = 0U;
+    _AppendText(line, &index, "IMU ");
+    if (pView->h2ImuValid != 0U) {
+        _AppendText(line, &index, "OK");
+    } else if (pView->h2ImuOnline != 0U) {
+        _AppendText(line, &index, "LOST");
+    } else {
+        _AppendText(line, &index, "NO");
+    }
+    _ShowLineIfChanged(4U, line);
+
+    _ClearLine(line);
+    index = 0U;
+    _AppendText(line, &index, "WAIT ");
+    _AppendText(line, &index, waitName);
     _ShowLineIfChanged(5U, line);
 }
 

@@ -19,6 +19,7 @@ const SYSTICK = scripting.addModule("/ti/driverlib/SYSTICK");
 const UART    = scripting.addModule("/ti/driverlib/UART", {}, false);
 const UART1   = UART.addInstance();
 const UART2   = UART.addInstance();
+const UART3   = UART.addInstance();
 
 /* TB6612 motor PWM, matching the proven Test_Trace_plus polarity. */
 PWM1.$name                      = "PWM_MOTOR_A";
@@ -46,7 +47,7 @@ PWM2.peripheral.ccp1Pin_cmpl.$assign = "PB13";
 PWM2.ccp1PinConfig.$name             = "ti_driverlib_gpio_PWM_MOTOR_B_BASE";
 PWM2.ccp1Pin_cmplConfig.$name        = "ti_driverlib_gpio_PWM_MOTOR_B";
 PWM2.PWM_CHANNEL_1.$name             = "ti_driverlib_pwm_TB6612_PWMB";
-PWM2.peripheral.ccp1Pin.$suggestSolution = "PA1";
+PWM2.peripheral.ccp1Pin.$assign      = "PA3";  /* base channel unused; PB13 complement drives PWMB */
 
 /* Final LDX-218 servo: 50 Hz PWM on PB20. */
 PWM3.$name                      = "PWM_SERVO";
@@ -227,6 +228,16 @@ UART2.peripheral.rxPin.$assign = "PA25";
 UART2.peripheral.txPin.$assign = "PA26";
 UART2.txPinConfig.$name        = "ti_driverlib_gpio_K230_TX";
 UART2.rxPinConfig.$name        = "ti_driverlib_gpio_K230_RX";
+
+/* JY61P: UART1, G3507 PA9 RX <- JY61P TX, PA8 TX -> JY61P RX(optional). */
+UART3.$name                    = "UART_JY61P";
+UART3.targetBaudRate           = 115200;
+UART3.enabledInterrupts        = ["RX"];
+UART3.peripheral.$assign       = "UART1";
+UART3.peripheral.rxPin.$assign = "PA9";
+UART3.peripheral.txPin.$assign = "PA8";
+UART3.txPinConfig.$name        = "ti_driverlib_gpio_JY61P_TX";
+UART3.rxPinConfig.$name        = "ti_driverlib_gpio_JY61P_RX";
 
 const Board = scripting.addModule("/ti/driverlib/Board", {}, false);
 Board.peripheral.$suggestSolution          = "DEBUGSS";

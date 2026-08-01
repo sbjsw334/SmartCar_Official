@@ -3,6 +3,11 @@
 
 #include <stdint.h>
 
+#define BSP_OLED_H2_WAIT_OK   (0U)
+#define BSP_OLED_H2_WAIT_ENC  (1U)
+#define BSP_OLED_H2_WAIT_IMU  (2U)
+#define BSP_OLED_H2_WAIT_LINE (3U)
+
 typedef struct {
     uint8_t mode;
     uint8_t fatherState;
@@ -12,6 +17,15 @@ typedef struct {
     int16_t ballOffsetMm;
     uint8_t ballValid;
     uint8_t gray;
+    uint16_t h2RoutePercent;
+    uint16_t h2YawDeg;
+    uint16_t h2ImuError;
+    uint16_t h2ImuRx;
+    uint16_t h2ImuAngle;
+    uint8_t h2ImuValid;
+    uint8_t h2ImuOnline;
+    uint8_t h2FinishLine;
+    uint8_t h2WaitCode;
 } BspOledStatusView_t;
 
 void BspOled_Init(void);
