@@ -62,6 +62,7 @@ struct _AppCarDef {
     uint32_t ballStateMs;
     uint32_t routePulses;
     uint16_t finishLineMs;
+    uint16_t finishTraceReadyMs;
     uint16_t finishAlignStableMs;
     int32_t imuLapYawCd;
     int32_t h2FinishForwardYawCd;
@@ -90,6 +91,7 @@ struct _AppCarDef {
     int16_t rightCommand;
     int8_t traceTurn;
     uint8_t traceState;
+    uint8_t h5VisionRejectCount;
     uint8_t ballValid;
     uint8_t imuValid;
     uint8_t imuOnline;

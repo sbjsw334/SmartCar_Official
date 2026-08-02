@@ -11,7 +11,7 @@
 /* Track speeds: tune these values at the field. */
 #define APP_CAR_TRACE_SPEED_H2           (36)       /* H2 normal 8-sensor trace speed */
 #define APP_CAR_TRACE_SPEED_H4           (24)       /* H4 A->B稳球速度：先用24，车稳后再试26 */
-#define APP_CAR_TRACE_SPEED_H5           (28)       /* H5 speed */
+#define APP_CAR_TRACE_SPEED_H5           (26)       /* H5 front-half speed */
 
 /* H2/H5 lap protection. 13 PPR * 28 gear ratio * 4 edges. */
 #define APP_CAR_ENCODER_COUNTS_PER_REV   (13U * 28U * 4U)
@@ -92,10 +92,10 @@
  * 5) H5_START_FF_MM：起步前馈；只在起步前1.2s左右叠加，抵消起步瞬间偏移。
  * 6) H5_ACC_FF_*：用编码器速度变化估算车体加减速，只小幅修正球目标。
  * 7) H5_LAP_GATE_PERCENT：一圈到80%以后才允许A横线作为终点，避免刚起步误判A线。
- * 8) H56_FINISH_*：识别A线后停表，先正常循迹过线，再保持方向平滑减速。
+ * 8) H56_FINISH_*：识别A线后停表，先锁住两轮输出穿过横线，再恢复循迹并平滑减速。
  */
-#define APP_CAR_H5_RAMP_START_SPEED       (18)
-#define APP_CAR_H5_RAMP_MS                (1200U)
+#define APP_CAR_H5_RAMP_START_SPEED       (14)
+#define APP_CAR_H5_RAMP_MS                (2000U)
 #define APP_CAR_H5_START_READY_ERROR_MM   (10)
 #define APP_CAR_H5_START_READY_MS         (200U)
 #define APP_CAR_H5_HOLD_BIAS_MM           (6)
@@ -111,11 +111,21 @@
 #define APP_CAR_H5_ACC_FF_GAIN_NUM        (1)
 #define APP_CAR_H5_ACC_FF_GAIN_DEN        (4)
 #define APP_CAR_H5_SPEED_FILTER_DEN       (8)
+#define APP_CAR_H5_STABLE_SPEED           (22)
+#define APP_CAR_H5_STABLE_GATE_PERCENT    (40U)
+#define APP_CAR_H5_STABLE_GATE_PULSES     \
+    ((APP_CAR_LAP_EXPECTED_PULSES * APP_CAR_H5_STABLE_GATE_PERCENT) / 100U)
+#define APP_CAR_H5_VISION_JUMP_REJECT_MM  (30)
+#define APP_CAR_H5_VISION_JUMP_ACCEPT_COUNT (2U)
 #define APP_CAR_H5_LAP_GATE_PERCENT       (80U)
 #define APP_CAR_H5_LAP_GATE_PULSES        \
     ((APP_CAR_LAP_EXPECTED_PULSES * APP_CAR_H5_LAP_GATE_PERCENT) / 100U)
-#define APP_CAR_H56_FINISH_CRUISE_MS      (400U)
+#define APP_CAR_H56_FINISH_CRUISE_MS      (800U)
 #define APP_CAR_H56_FINISH_DECEL_MS       (2200U)
+#define APP_CAR_H56_FINISH_LOCK_MIN_MS    (120U)
+#define APP_CAR_H56_FINISH_TRACE_READY_MS (60U)
+#define APP_CAR_H56_FINISH_CANDIDATE_MIN  (3U)
+#define APP_CAR_H56_FINISH_SEARCH_DELTA   (4)
 
 #define APP_CAR_TARGET_MIN_MM             (-100)
 #define APP_CAR_TARGET_MAX_MM             (100)
@@ -183,7 +193,10 @@ static void _UpdateH5AccelFeedforward(AppCarDef *pCar);
 static void _RunTraceControl(AppCarDef *pCar);
 static void _RunBalanceFinishDecel(AppCarDef *pCar,
     uint32_t decelElapsedMs, uint32_t decelMs);
+static void _RunLockedTraceCommands(AppCarDef *pCar);
+static void _RunH56FinishSearch(AppCarDef *pCar);
 static void _RunBallControl(AppCarDef *pCar, int16_t targetMm);
+static uint8_t _ShouldRejectH5VisionJump(AppCarDef *pCar);
 static int16_t _GetCurrentTraceSpeed(const AppCarDef *pCar);
 static int16_t _GetBallHoldTargetMm(const AppCarDef *pCar);
 static int16_t _ClampBallTargetMm(int16_t targetMm);
@@ -194,6 +207,9 @@ static uint8_t _IsBallFinalStable(AppCarDef *pCar, int16_t targetMm);
 static void _PrintBallStageResult(const AppCarDef *pCar, const char *name,
     int16_t targetMm);
 static uint8_t _IsFinishLine(uint8_t gray);
+static uint8_t _IsH56FinishCandidate(uint8_t gray);
+static uint8_t _IsH56TraceReady(uint8_t gray);
+static uint8_t _CountBlackSensors(uint8_t gray);
 static uint8_t _IsBalanceLapMode(AppCarMode_t mode);
 static uint32_t _AbsCount(int32_t count);
 static int32_t _AbsI32(int32_t value);
@@ -237,6 +253,7 @@ static void _Init(AppCarDef *pCar)
     pCar->ballStateMs = 0U;
     pCar->routePulses = 0U;
     pCar->finishLineMs = 0U;
+    pCar->finishTraceReadyMs = 0U;
     pCar->finishAlignStableMs = 0U;
     pCar->imuLapYawCd = 0;
     pCar->h2FinishForwardYawCd = 0;
@@ -264,6 +281,7 @@ static void _Init(AppCarDef *pCar)
     pCar->h5SpeedFiltPps = 0;
     pCar->h5LastSpeedFiltPps = 0;
     pCar->h5AccelFfMm = 0;
+    pCar->h5VisionRejectCount = 0U;
     pCar->leftCount = 0;
     pCar->rightCount = 0;
     pCar->leftCommand = 0;
@@ -498,7 +516,10 @@ static void _RouteTracking(AppCarDef *pCar)
     }
 
     if (_CanFinishByRouteGate(pCar) &&
-        (_IsFinishLine(pCar->gray) != 0U)) {
+        (((_IsBalanceLapMode(pCar->mode) != 0U) &&
+          (_IsH56FinishCandidate(pCar->gray) != 0U)) ||
+         ((_IsBalanceLapMode(pCar->mode) == 0U) &&
+          (_IsFinishLine(pCar->gray) != 0U)))) {
         if (pCar->finishLineMs < APP_CAR_FINISH_CONFIRM_MS) {
             pCar->finishLineMs += APP_CAR_CONTROL_PERIOD_MS;
         }
@@ -519,6 +540,10 @@ static void _RouteTracking(AppCarDef *pCar)
             pCar->pRouteState(pCar);
             return;
         }
+        if (_IsBalanceLapMode(pCar->mode) != 0U) {
+            _RunLockedTraceCommands(pCar);
+            return;
+        }
     } else {
         pCar->finishLineMs = 0U;
     }
@@ -529,6 +554,29 @@ static void _RouteTracking(AppCarDef *pCar)
 static void _RouteFinishAction(AppCarDef *pCar)
 {
     if (pCar->routeStateMs < _GetFinishFollowMs(pCar->mode)) {
+        if (_IsBalanceLapMode(pCar->mode) != 0U) {
+            if ((pCar->routeStateMs < APP_CAR_H56_FINISH_LOCK_MIN_MS) ||
+                (_IsH56FinishCandidate(pCar->gray) != 0U)) {
+                pCar->finishTraceReadyMs = 0U;
+                _RunLockedTraceCommands(pCar);
+                return;
+            }
+
+            if (_IsH56TraceReady(pCar->gray) != 0U) {
+                if (pCar->finishTraceReadyMs <
+                    APP_CAR_H56_FINISH_TRACE_READY_MS) {
+                    pCar->finishTraceReadyMs += APP_CAR_CONTROL_PERIOD_MS;
+                }
+            } else {
+                pCar->finishTraceReadyMs = 0U;
+            }
+
+            if (pCar->finishTraceReadyMs <
+                APP_CAR_H56_FINISH_TRACE_READY_MS) {
+                _RunH56FinishSearch(pCar);
+                return;
+            }
+        }
         if ((pCar->mode == APP_CAR_MODE_BALANCE_AB) &&
             (pCar->routeStateMs >= APP_CAR_H4_FINISH_CRUISE_MS)) {
             _RunBalanceFinishDecel(pCar,
@@ -802,6 +850,8 @@ static void _EnterStopped(AppCarDef *pCar)
     pCar->h5SpeedFiltPps = 0;
     pCar->h5LastSpeedFiltPps = 0;
     pCar->h5AccelFfMm = 0;
+    pCar->finishTraceReadyMs = 0U;
+    pCar->h5VisionRejectCount = 0U;
     pCar->h4AccFiltMg = 0;
     pCar->h4AccFfMm = 0;
     pCar->h4AccRejectCount = 0U;
@@ -822,9 +872,11 @@ static void _EnterRunning(AppCarDef *pCar)
     pCar->routePulses = 0U;
     pCar->leftCount = 0;
     pCar->rightCount = 0;
+    pCar->finishTraceReadyMs = 0U;
     pCar->h5SpeedFiltPps = 0;
     pCar->h5LastSpeedFiltPps = 0;
     pCar->h5AccelFfMm = 0;
+    pCar->h5VisionRejectCount = 0U;
     pCar->timerRunning = 1U;
     BspEncoder_Reset();
     BspMotor_Stop();
@@ -876,6 +928,7 @@ static void _SetRouteState(AppCarDef *pCar, AppCarRouteState_t state)
     pCar->routeState = state;
     pCar->routeStateMs = 0U;
     pCar->finishLineMs = 0U;
+    pCar->finishTraceReadyMs = 0U;
     pCar->finishAlignStableMs = 0U;
 
     switch (state) {
@@ -1156,7 +1209,7 @@ static void _RunBalanceFinishDecel(AppCarDef *pCar,
     }
 
     /* 先计算正常循迹方向，再等比例缩小两轮输出，直到平滑降为0。 */
-    TraceControl_SetBaseSpeed(&pCar->trace, _GetTraceSpeed(pCar->mode));
+    TraceControl_SetBaseSpeed(&pCar->trace, _GetCurrentTraceSpeed(pCar));
     TraceControl_Update(&pCar->trace, pCar->gray);
     remainingMs = decelMs - decelElapsedMs;
 
@@ -1172,13 +1225,132 @@ static void _RunBalanceFinishDecel(AppCarDef *pCar,
     BspMotor_SetSignedSpeed(pCar->leftCommand, pCar->rightCommand);
 }
 
+static void _RunLockedTraceCommands(AppCarDef *pCar)
+{
+    int16_t speed;
+
+    if (pCar == 0) {
+        return;
+    }
+
+    speed = _GetCurrentTraceSpeed(pCar);
+    pCar->leftCommand = speed;
+    pCar->rightCommand = speed;
+
+    BspMotor_SetSignedSpeed(pCar->leftCommand, pCar->rightCommand);
+}
+
+static void _RunH56FinishSearch(AppCarDef *pCar)
+{
+    int16_t baseSpeed;
+    int16_t delta;
+    int16_t leftCommand;
+    int16_t rightCommand;
+    uint32_t decelElapsedMs;
+    uint32_t remainingMs;
+
+    if (pCar == 0) {
+        return;
+    }
+
+    baseSpeed = _GetCurrentTraceSpeed(pCar);
+    delta = APP_CAR_H56_FINISH_SEARCH_DELTA;
+    if (pCar->trace.lastTurn < 0) {
+        leftCommand = (int16_t)(baseSpeed - delta);
+        rightCommand = (int16_t)(baseSpeed + delta);
+    } else {
+        /* H5/H6 run the same lap direction; use that direction if no turn was saved. */
+        leftCommand = (int16_t)(baseSpeed + delta);
+        rightCommand = (int16_t)(baseSpeed - delta);
+    }
+
+    if (pCar->routeStateMs >= APP_CAR_H56_FINISH_CRUISE_MS) {
+        decelElapsedMs =
+            pCar->routeStateMs - APP_CAR_H56_FINISH_CRUISE_MS;
+        if (decelElapsedMs >= APP_CAR_H56_FINISH_DECEL_MS) {
+            leftCommand = 0;
+            rightCommand = 0;
+        } else {
+            remainingMs = APP_CAR_H56_FINISH_DECEL_MS - decelElapsedMs;
+            leftCommand = (int16_t)(
+                ((int32_t)leftCommand * (int32_t)remainingMs) /
+                (int32_t)APP_CAR_H56_FINISH_DECEL_MS);
+            rightCommand = (int16_t)(
+                ((int32_t)rightCommand * (int32_t)remainingMs) /
+                (int32_t)APP_CAR_H56_FINISH_DECEL_MS);
+        }
+    }
+
+    if (leftCommand < 0) {
+        leftCommand = 0;
+    }
+    if (rightCommand < 0) {
+        rightCommand = 0;
+    }
+
+    pCar->leftCommand = leftCommand;
+    pCar->rightCommand = rightCommand;
+    pCar->traceState = (uint8_t)TRACE_STATE_SEARCHING;
+    BspMotor_SetSignedSpeed(pCar->leftCommand, pCar->rightCommand);
+}
+
 static void _RunBallControl(AppCarDef *pCar, int16_t targetMm)
 {
-    uint16_t pulseUs = BallControl_Update(&pCar->ballControl,
+    uint16_t pulseUs;
+
+    if (_ShouldRejectH5VisionJump(pCar) != 0U) {
+        BspServo_SetPulseUs(pCar->ballControl.lastPulseUs);
+        return;
+    }
+
+    pulseUs = BallControl_Update(&pCar->ballControl,
         targetMm, pCar->ballOffsetMm, pCar->ballFrameSeq,
         pCar->uptimeMs, pCar->ballValid);
 
     BspServo_SetPulseUs(pulseUs);
+}
+
+static uint8_t _ShouldRejectH5VisionJump(AppCarDef *pCar)
+{
+    int32_t deltaMm;
+
+    if ((pCar == 0) ||
+        (pCar->mode != APP_CAR_MODE_BALANCE_LAP_CENTER) ||
+        (pCar->fatherState != APP_CAR_FATHER_RUNNING) ||
+        ((pCar->routeState != APP_CAR_ROUTE_TRACKING) &&
+         (pCar->routeState != APP_CAR_ROUTE_FINISH_ACTION))) {
+        if (pCar != 0) {
+            pCar->h5VisionRejectCount = 0U;
+        }
+        return 0U;
+    }
+
+    if ((pCar->ballValid == 0U) || (pCar->ballControl.hasFrame == 0U)) {
+        pCar->h5VisionRejectCount = 0U;
+        return 0U;
+    }
+
+    if (pCar->ballFrameSeq == pCar->ballControl.lastFrameSeq) {
+        return 0U;
+    }
+
+    deltaMm = (int32_t)pCar->ballOffsetMm -
+        (int32_t)pCar->ballControl.lastBallMm;
+    if (_AbsI32(deltaMm) <= APP_CAR_H5_VISION_JUMP_REJECT_MM) {
+        pCar->h5VisionRejectCount = 0U;
+        return 0U;
+    }
+
+    if (pCar->h5VisionRejectCount >= APP_CAR_H5_VISION_JUMP_ACCEPT_COUNT) {
+        pCar->h5VisionRejectCount = 0U;
+        return 0U;
+    }
+
+    pCar->h5VisionRejectCount++;
+    pCar->ballControl.lastFrameSeq = pCar->ballFrameSeq;
+    pCar->ballControl.lastSampleMs = pCar->uptimeMs;
+    pCar->ballControl.ballSpeedMmPerSec = 0;
+    return 1U;
 }
 
 static int16_t _GetCurrentTraceSpeed(const AppCarDef *pCar)
@@ -1200,6 +1372,12 @@ static int16_t _GetCurrentTraceSpeed(const AppCarDef *pCar)
         /* H4用球控HOLD状态的连续时间，经过A线切换路线状态时不重置缓启动。 */
         rampElapsedMs = pCar->ballStateMs;
     } else if (pCar->mode == APP_CAR_MODE_BALANCE_LAP_CENTER) {
+        if (((pCar->routeState == APP_CAR_ROUTE_TRACKING) ||
+             (pCar->routeState == APP_CAR_ROUTE_FINISH_ACTION)) &&
+            (pCar->routePulses >= APP_CAR_H5_STABLE_GATE_PULSES)) {
+            targetSpeed = APP_CAR_H5_STABLE_SPEED;
+        }
+
         /* H5 only ramps at launch. routeStateMs is reset after detecting A;
          * applying the launch ramp in FINISH_ACTION would slow down for 400 ms
          * and then jump back to full speed at the start of finish deceleration.
@@ -1421,6 +1599,29 @@ static void _PrintBallStageResult(const AppCarDef *pCar, const char *name,
 
 static uint8_t _IsFinishLine(uint8_t gray)
 {
+    return (uint8_t)(
+        _CountBlackSensors(gray) >= APP_CAR_FINISH_SENSOR_MIN);
+}
+
+static uint8_t _IsH56FinishCandidate(uint8_t gray)
+{
+    return (uint8_t)(
+        _CountBlackSensors(gray) >= APP_CAR_H56_FINISH_CANDIDATE_MIN);
+}
+
+static uint8_t _IsH56TraceReady(uint8_t gray)
+{
+    uint8_t pattern = (uint8_t)(~gray);
+
+    return (uint8_t)(
+        (pattern == 0xEFU) || (pattern == 0xE7U) ||
+        (pattern == 0xF7U) || (pattern == 0xF3U) ||
+        (pattern == 0xFBU) || (pattern == 0xCFU) ||
+        (pattern == 0xDFU));
+}
+
+static uint8_t _CountBlackSensors(uint8_t gray)
+{
     uint8_t blackCount = 0U;
 
     while (gray != 0U) {
@@ -1428,7 +1629,7 @@ static uint8_t _IsFinishLine(uint8_t gray)
         gray >>= 1;
     }
 
-    return (uint8_t)(blackCount >= APP_CAR_FINISH_SENSOR_MIN);
+    return blackCount;
 }
 
 static uint32_t _AbsCount(int32_t count)
@@ -1649,14 +1850,18 @@ static void _PrintH4Telemetry(const AppCarDef *pCar)
 static void _PrintH5Telemetry(const AppCarDef *pCar)
 {
     int16_t targetMm = _GetBallHoldTargetMm(pCar);
+    uint8_t tracePattern = (uint8_t)(~pCar->gray);
+    int16_t traceDiff = (int16_t)(
+        pCar->trace.leftCommand - pCar->trace.rightCommand);
 
     BspUart_Printf(
-        "[H5D] et=%lu st=%lu r=%u p=%lu g=%02X ln=%u tm=%u b=%d/%u v=%d tg=%d hb=%d sf=%d af=%d e=%d,%d c=%d,%d tr=%d/%u u=%u\n",
+        "[H5D] et=%lu st=%lu r=%u p=%lu g=%02X tp=%02X ln=%u tm=%u b=%d/%u v=%d tg=%d hb=%d sf=%d af=%d e=%d,%d iy=%ld/%d/%u/%u tb=%d tc=%d,%d td=%d c=%d,%d tr=%d/%u u=%u\n",
         (unsigned long)pCar->elapsedMs,
         (unsigned long)pCar->routeStateMs,
         (unsigned)pCar->routeState,
         (unsigned long)pCar->routePulses,
         (unsigned)pCar->gray,
+        (unsigned)tracePattern,
         (unsigned)pCar->finishLineMs,
         (unsigned)pCar->timerRunning,
         (int)pCar->ballOffsetMm,
@@ -1668,6 +1873,14 @@ static void _PrintH5Telemetry(const AppCarDef *pCar)
         (int)pCar->h5AccelFfMm,
         (int)pCar->leftSpeed,
         (int)pCar->rightSpeed,
+        (long)pCar->imuLapYawCd,
+        (int)pCar->imuYawCd,
+        (unsigned)pCar->imuValid,
+        (unsigned)pCar->imuOnline,
+        (int)pCar->trace.baseSpeed,
+        (int)pCar->trace.leftCommand,
+        (int)pCar->trace.rightCommand,
+        (int)traceDiff,
         (int)pCar->leftCommand,
         (int)pCar->rightCommand,
         (int)pCar->traceTurn,
@@ -1677,16 +1890,31 @@ static void _PrintH5Telemetry(const AppCarDef *pCar)
 
 static void _PrintH5Event(const AppCarDef *pCar, const char *eventName)
 {
+    uint8_t tracePattern = (uint8_t)(~pCar->gray);
+    int16_t traceDiff = (int16_t)(
+        pCar->trace.leftCommand - pCar->trace.rightCommand);
+
     BspUart_Printf(
-        "[H5E] %s et=%lu st=%lu p=%lu g=%02X b=%d/%u tg=%d c=%d,%d\n",
+        "[H5E] %s et=%lu st=%lu p=%lu g=%02X tp=%02X b=%d/%u tg=%d iy=%ld/%d/%u/%u tb=%d tc=%d,%d td=%d tr=%d/%u c=%d,%d\n",
         eventName,
         (unsigned long)pCar->elapsedMs,
         (unsigned long)pCar->routeStateMs,
         (unsigned long)pCar->routePulses,
         (unsigned)pCar->gray,
+        (unsigned)tracePattern,
         (int)pCar->ballOffsetMm,
         (unsigned)pCar->ballValid,
         (int)_GetBallHoldTargetMm(pCar),
+        (long)pCar->imuLapYawCd,
+        (int)pCar->imuYawCd,
+        (unsigned)pCar->imuValid,
+        (unsigned)pCar->imuOnline,
+        (int)pCar->trace.baseSpeed,
+        (int)pCar->trace.leftCommand,
+        (int)pCar->trace.rightCommand,
+        (int)traceDiff,
+        (int)pCar->traceTurn,
+        (unsigned)pCar->traceState,
         (int)pCar->leftCommand,
         (int)pCar->rightCommand);
 }
