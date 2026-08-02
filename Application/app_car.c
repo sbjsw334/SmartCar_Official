@@ -30,14 +30,14 @@
  * Normal H2 tracing does not depend on the gyro. After detecting A again,
  * lock the current gyro heading and drive straight before aligning back to start.
  */
-#define APP_CAR_H2_FINISH_FOLLOW_MS      (800U)     /* H2: after finish line, lock current gyro yaw and drive straight */
+#define APP_CAR_H2_FINISH_FOLLOW_MS      (500U)     /* H2: after finish line, lock current gyro yaw and drive straight */
 #define APP_CAR_H2_FINISH_BRAKE_MS       (80U)      /* H2: reverse brake time */
 #define APP_CAR_H2_FINISH_BRAKE_SPEED    (20)       /* H2: reverse brake strength */
 #define APP_CAR_H2_FINISH_ALIGN_ENABLE   (1U)       /* 第二题：停车后是否用JY61P回到起始角度，0=关闭 */
 #define APP_CAR_H2_FINISH_ALIGN_ERROR_CD (100L)     /* H2: final align tolerance, 100 = 1 degree */
 #define APP_CAR_H2_FINISH_ALIGN_STABLE_MS (100U)    /* 第二题：回正到位后保持时间 */
-#define APP_CAR_H2_FINISH_ALIGN_TIMEOUT_MS (860U)   /* H2: final align timeout */
-#define APP_CAR_H2_FINISH_ALIGN_SPEED    (16)       /* H2: base rotate speed */
+#define APP_CAR_H2_FINISH_ALIGN_TIMEOUT_MS (1000U)   /* H2: final align timeout */
+#define APP_CAR_H2_FINISH_ALIGN_SPEED    (13)       /* H2: base rotate speed */
 #define APP_CAR_H2_FINISH_ALIGN_EXTRA_SPEED (1)     /* H2: dither 16/17 to get about 16.5 */
 #define APP_CAR_H2_FINISH_ALIGN_DITHER_MS (20U)     /* H2: align speed dither period */
 #define APP_CAR_H2_FINISH_ALIGN_DIRECTION (1)       /* 第二题：回正方向补偿，若越转越偏改成-1 */
