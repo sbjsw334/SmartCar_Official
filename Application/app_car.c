@@ -54,16 +54,14 @@
  * 3) H4_START_READY_ERROR_MM / H4_START_READY_MS：START后球在中心附近稳定多久才允许发车。
  * 4) H4_START_FF_MM：起步球位前馈，默认0；若起步球总往同一边甩，再在-15~+15mm内小步改。
  * 5) A线忽略：H4刚起步遇到4路以上黑线连续30ms，只认为通过A线，继续循迹，不停表。
- * 6) H4_AB_LENGTH_MM / H4_AB_GATE_PERCENT：B点横线放行距离，防止刚出发误识别横线。
- * 7) H4_FINISH_FOLLOW_MS：过B停表后继续循迹时间，只为停车更柔，不计入H4时间。
+ * 6) H4_AB_LENGTH_MM：题目AB直线长度；H4仅用编码器判断通过B，B点没有横向黑线。
+ * 7) H4_FINISH_CRUISE_MS：通过B并停表后继续正常循迹时间，不计入H4时间。
+ * 8) H4_FINISH_DECEL_MS：随后保持循迹方向，将左右电机输出平滑降到0，减小钢球惯性。
  */
 #define APP_CAR_H4_AB_LENGTH_MM           (1500U)
 #define APP_CAR_H4_AB_EXPECTED_PULSES     \
     ((APP_CAR_H4_AB_LENGTH_MM * APP_CAR_ENCODER_COUNTS_PER_REV) / \
      APP_CAR_WHEEL_CIRCUMFERENCE_MM)
-#define APP_CAR_H4_AB_GATE_PERCENT        (70U)
-#define APP_CAR_H4_AB_GATE_PULSES         \
-    ((APP_CAR_H4_AB_EXPECTED_PULSES * APP_CAR_H4_AB_GATE_PERCENT) / 100U)
 #define APP_CAR_H4_RAMP_START_SPEED       (16)
 #define APP_CAR_H4_RAMP_MS                (1000U)
 #define APP_CAR_H4_START_READY_ERROR_MM   (10)
@@ -71,7 +69,8 @@
 #define APP_CAR_H4_START_FF_MM            (0)
 #define APP_CAR_H4_START_FF_HOLD_MS       (500U)
 #define APP_CAR_H4_START_FF_FADE_MS       (700U)
-#define APP_CAR_H4_FINISH_FOLLOW_MS       (300U)
+#define APP_CAR_H4_FINISH_CRUISE_MS       (2000U)
+#define APP_CAR_H4_FINISH_DECEL_MS        (1500U)
 
 /* H5 parameters: one clockwise lap with ball held at O.
  * 第五题只优先调下面这些值：
@@ -167,6 +166,7 @@ static void _RunChildren(AppCarDef *pCar);
 static void _SampleInputs(AppCarDef *pCar);
 static void _UpdateH5AccelFeedforward(AppCarDef *pCar);
 static void _RunTraceControl(AppCarDef *pCar);
+static void _RunH4FinishDecel(AppCarDef *pCar, uint32_t decelElapsedMs);
 static void _RunBallControl(AppCarDef *pCar, int16_t targetMm);
 static int16_t _GetCurrentTraceSpeed(const AppCarDef *pCar);
 static int16_t _GetBallHoldTargetMm(const AppCarDef *pCar);
@@ -452,6 +452,15 @@ static void _RouteLeaveStart(AppCarDef *pCar)
 
 static void _RouteTracking(AppCarDef *pCar)
 {
+    if ((pCar->mode == APP_CAR_MODE_BALANCE_AB) &&
+        (pCar->routePulses >= APP_CAR_H4_AB_EXPECTED_PULSES)) {
+        /* 题目B点没有横向黑线：编码器达到1.5m即视为通过B并立即停表。 */
+        pCar->timerRunning = 0U;
+        _SetRouteState(pCar, APP_CAR_ROUTE_FINISH_ACTION);
+        pCar->pRouteState(pCar);
+        return;
+    }
+
     if (_CanFinishByRouteGate(pCar) &&
         (_IsFinishLine(pCar->gray) != 0U)) {
         if (pCar->finishLineMs < APP_CAR_FINISH_CONFIRM_MS) {
@@ -481,7 +490,11 @@ static void _RouteTracking(AppCarDef *pCar)
 static void _RouteFinishAction(AppCarDef *pCar)
 {
     if (pCar->routeStateMs < _GetFinishFollowMs(pCar->mode)) {
-        if (pCar->mode == APP_CAR_MODE_TRACE_ONLY) {
+        if ((pCar->mode == APP_CAR_MODE_BALANCE_AB) &&
+            (pCar->routeStateMs >= APP_CAR_H4_FINISH_CRUISE_MS)) {
+            _RunH4FinishDecel(pCar,
+                pCar->routeStateMs - APP_CAR_H4_FINISH_CRUISE_MS);
+        } else if (pCar->mode == APP_CAR_MODE_TRACE_ONLY) {
             _RunH2FinishForward(pCar);
         } else {
             _RunTraceControl(pCar);
@@ -984,6 +997,37 @@ static void _RunTraceControl(AppCarDef *pCar)
     BspMotor_SetSignedSpeed(pCar->leftCommand, pCar->rightCommand);
 }
 
+static void _RunH4FinishDecel(AppCarDef *pCar, uint32_t decelElapsedMs)
+{
+    uint32_t remainingMs;
+
+    if ((pCar == 0) || (APP_CAR_H4_FINISH_DECEL_MS == 0U) ||
+        (decelElapsedMs >= APP_CAR_H4_FINISH_DECEL_MS)) {
+        BspMotor_Stop();
+        if (pCar != 0) {
+            pCar->leftCommand = 0;
+            pCar->rightCommand = 0;
+        }
+        return;
+    }
+
+    /* 先计算正常循迹方向，再等比例缩小两轮输出，直到平滑降为0。 */
+    TraceControl_SetBaseSpeed(&pCar->trace, _GetTraceSpeed(pCar->mode));
+    TraceControl_Update(&pCar->trace, pCar->gray);
+    remainingMs = APP_CAR_H4_FINISH_DECEL_MS - decelElapsedMs;
+
+    pCar->leftCommand = (int16_t)(
+        ((int32_t)pCar->trace.leftCommand * (int32_t)remainingMs) /
+        (int32_t)APP_CAR_H4_FINISH_DECEL_MS);
+    pCar->rightCommand = (int16_t)(
+        ((int32_t)pCar->trace.rightCommand * (int32_t)remainingMs) /
+        (int32_t)APP_CAR_H4_FINISH_DECEL_MS);
+    pCar->traceTurn = pCar->trace.lastTurn;
+    pCar->traceState = (uint8_t)pCar->trace.state;
+
+    BspMotor_SetSignedSpeed(pCar->leftCommand, pCar->rightCommand);
+}
+
 static void _RunBallControl(AppCarDef *pCar, int16_t targetMm)
 {
     uint16_t pulseUs = BallControl_Update(&pCar->ballControl,
@@ -1088,7 +1132,8 @@ static int16_t _ClampBallTargetMm(int16_t targetMm)
 static uint16_t _GetFinishFollowMs(AppCarMode_t mode)
 {
     if (mode == APP_CAR_MODE_BALANCE_AB) {
-        return APP_CAR_H4_FINISH_FOLLOW_MS;
+        return (uint16_t)(APP_CAR_H4_FINISH_CRUISE_MS +
+            APP_CAR_H4_FINISH_DECEL_MS);
     }
     if (mode == APP_CAR_MODE_BALANCE_LAP_CENTER) {
         return APP_CAR_H5_FINISH_FOLLOW_MS;
@@ -1359,7 +1404,8 @@ static void _UpdateImuLap(AppCarDef *pCar, const BspJy61pData_t *pImu)
 static uint8_t _CanFinishByRouteGate(const AppCarDef *pCar)
 {
     if (pCar->mode == APP_CAR_MODE_BALANCE_AB) {
-        return (uint8_t)(pCar->routePulses >= APP_CAR_H4_AB_GATE_PULSES);
+        /* H4通过B由1.5m编码器距离单独判断，不使用横线终点逻辑。 */
+        return 0U;
     }
     if (pCar->mode == APP_CAR_MODE_BALANCE_LAP_CENTER) {
         return (uint8_t)(pCar->routePulses >= APP_CAR_H5_LAP_GATE_PULSES);
