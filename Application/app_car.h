@@ -65,6 +65,7 @@ struct _AppCarDef {
     uint16_t finishLineMs;
     uint16_t finishAlignStableMs;
     int32_t imuLapYawCd;
+    int32_t h2FinishForwardYawCd;
     int16_t imuYawCd;
     int16_t imuLastYawCd;
     uint32_t imuSampleSeq;
@@ -86,6 +87,7 @@ struct _AppCarDef {
     uint8_t imuValid;
     uint8_t imuOnline;
     uint8_t imuHasLastYaw;
+    uint8_t h2FinishForwardYawValid;
     uint8_t gray;
     volatile uint8_t timerRunning;
 

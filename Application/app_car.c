@@ -28,18 +28,25 @@
 #define APP_CAR_FINISH_SENSOR_MIN        (4U)       /* H2: 4+ black sensors means cross line */
 #define APP_CAR_FINISH_FOLLOW_MS         (400U)     /* H5/H6: keep old finish follow logic */
 
-/* H2 simple finish: 8-sensor trace -> finish line confirm -> follow a little -> JY61P align.
- * 第二题只在 START 和最终回正时使用陀螺仪；正常循迹过程完全不依赖陀螺仪。
+/* H2 simple finish: 8-sensor trace -> finish line confirm -> gyro-straight -> brake -> JY61P align.
+ * 第二题正常循迹不依赖陀螺仪；识别回A线后先锁当前航向直行，再用JY61P回正起始角度。
  */
-#define APP_CAR_H2_FINISH_FOLLOW_MS      (400U)     /* 第二题：识别回A线后继续循迹时间，太短会早停，太长会冲过 */
+#define APP_CAR_H2_FINISH_FOLLOW_MS      (800U)     /* 第二题：识别回A线后沿当前方向前行时间，太短会早停，太长会冲过 */
 #define APP_CAR_H2_FINISH_BRAKE_MS       (80U)      /* H2: reverse brake time */
 #define APP_CAR_H2_FINISH_BRAKE_SPEED    (20)       /* H2: reverse brake strength */
 #define APP_CAR_H2_FINISH_ALIGN_ENABLE   (1U)       /* 第二题：停车后是否用JY61P回到起始角度，0=关闭 */
-#define APP_CAR_H2_FINISH_ALIGN_ERROR_CD (300L)     /* 第二题：回正允许误差，300=3度 */
+#define APP_CAR_H2_FINISH_ALIGN_ERROR_CD (100L)     /* 第二题：回正允许误差，100=1度；太小会抖，太大会看起来没回正 */
 #define APP_CAR_H2_FINISH_ALIGN_STABLE_MS (100U)    /* 第二题：回正到位后保持时间 */
-#define APP_CAR_H2_FINISH_ALIGN_TIMEOUT_MS (1000U)  /* 第二题：回正最长时间，超时直接结束 */
-#define APP_CAR_H2_FINISH_ALIGN_SPEED    (12)       /* 第二题：原地回正速度，太大易过冲，太小可能转不动 */
+#define APP_CAR_H2_FINISH_ALIGN_TIMEOUT_MS (860U)   /* 第二题：回正最长时间，差很多就加大，太久才结束就减小 */
+#define APP_CAR_H2_FINISH_ALIGN_SPEED    (16)       /* 第二题：原地回正速度；幅度太小就加大，过冲明显再减小 */
+#define APP_CAR_H2_FINISH_ALIGN_EXTRA_SPEED (1)     /* 第二题：16偏左、17偏右时设1，和16交替得到约16.5 */
+#define APP_CAR_H2_FINISH_ALIGN_DITHER_MS (20U)     /* 第二题：回正速度交替周期，保持20ms即可 */
 #define APP_CAR_H2_FINISH_ALIGN_DIRECTION (1)       /* 第二题：回正方向补偿，若越转越偏改成-1 */
+#define APP_CAR_H2_FINISH_FORWARD_SPEED  (APP_CAR_TRACE_SPEED_H2) /* 第二题：识别回A线后锁当前航向直行速度 */
+#define APP_CAR_H2_FINISH_FORWARD_KP_NUM (1)        /* 第二题：锁航向直行比例系数分子；转向不够就增大 */
+#define APP_CAR_H2_FINISH_FORWARD_KP_DEN (50)       /* 第二题：锁航向直行比例系数分母；转向太猛就增大 */
+#define APP_CAR_H2_FINISH_FORWARD_LIMIT  (12)       /* 第二题：锁航向直行最大差速修正，防止过猛 */
+#define APP_CAR_H2_FINISH_FORWARD_DIRECTION (1)     /* 第二题：锁航向直行方向补偿，若越修越偏改成-1 */
 
 /* H4 parameters: A -> B with ball held near O.
  * H4调参只优先改下面这些值：
@@ -133,6 +140,9 @@ static uint8_t _IsFinishLine(uint8_t gray);
 static uint32_t _AbsCount(int32_t count);
 static int32_t _AbsI32(int32_t value);
 static int16_t _AngleDeltaCd(int16_t nowCd, int16_t lastCd);
+static void _LockH2FinishForwardYaw(AppCarDef *pCar);
+static void _RunH2FinishForward(AppCarDef *pCar);
+static int32_t _H2FinishForwardErrorCd(const AppCarDef *pCar);
 static int32_t _H2HeadingErrorCd(const AppCarDef *pCar);
 static void _ResetImuLap(AppCarDef *pCar);
 static void _UpdateImuLap(AppCarDef *pCar, const BspJy61pData_t *pImu);
@@ -167,12 +177,14 @@ static void _Init(AppCarDef *pCar)
     pCar->finishLineMs = 0U;
     pCar->finishAlignStableMs = 0U;
     pCar->imuLapYawCd = 0;
+    pCar->h2FinishForwardYawCd = 0;
     pCar->imuYawCd = 0;
     pCar->imuLastYawCd = 0;
     pCar->imuSampleSeq = 0U;
     pCar->imuValid = 0U;
     pCar->imuOnline = 0U;
     pCar->imuHasLastYaw = 0U;
+    pCar->h2FinishForwardYawValid = 0U;
     pCar->ballStableMs = 0U;
     pCar->ballStableFrameSeq = 0U;
     pCar->ballTargetMm = 0;
@@ -369,6 +381,7 @@ static void _RouteTracking(AppCarDef *pCar)
         }
         if (pCar->finishLineMs >= APP_CAR_FINISH_CONFIRM_MS) {
             if (pCar->mode == APP_CAR_MODE_TRACE_ONLY) {
+                _LockH2FinishForwardYaw(pCar);
                 _SetRouteState(pCar, APP_CAR_ROUTE_FINISH_ACTION);
             } else {
                 if (pCar->mode == APP_CAR_MODE_BALANCE_AB) {
@@ -389,7 +402,11 @@ static void _RouteTracking(AppCarDef *pCar)
 static void _RouteFinishAction(AppCarDef *pCar)
 {
     if (pCar->routeStateMs < _GetFinishFollowMs(pCar->mode)) {
-        _RunTraceControl(pCar);
+        if (pCar->mode == APP_CAR_MODE_TRACE_ONLY) {
+            _RunH2FinishForward(pCar);
+        } else {
+            _RunTraceControl(pCar);
+        }
         return;
     }
     BspMotor_Stop();
@@ -417,9 +434,11 @@ static void _RouteFinishBrake(AppCarDef *pCar)
     pCar->leftCommand = 0;
     pCar->rightCommand = 0;
     if ((pCar->mode == APP_CAR_MODE_TRACE_ONLY) &&
-        (APP_CAR_H2_FINISH_ALIGN_ENABLE != 0U) &&
-        (pCar->imuOnline != 0U) &&
-        (pCar->imuHasLastYaw != 0U)) {
+        (APP_CAR_H2_FINISH_ALIGN_ENABLE != 0U)) {
+        BspUart_Printf("[H2] align start iy=%ld online=%u has=%u\n",
+            (long)pCar->imuLapYawCd,
+            (unsigned)pCar->imuOnline,
+            (unsigned)pCar->imuHasLastYaw);
         _SetRouteState(pCar, APP_CAR_ROUTE_FINISH_ALIGN);
     } else {
         _SetRouteState(pCar, APP_CAR_ROUTE_COMPLETE);
@@ -436,6 +455,10 @@ static void _RouteFinishAlign(AppCarDef *pCar)
         BspMotor_Stop();
         pCar->leftCommand = 0;
         pCar->rightCommand = 0;
+        BspUart_Printf("[H2] align skip/timeout iy=%ld online=%u has=%u\n",
+            (long)pCar->imuLapYawCd,
+            (unsigned)pCar->imuOnline,
+            (unsigned)pCar->imuHasLastYaw);
         _SetRouteState(pCar, APP_CAR_ROUTE_COMPLETE);
         return;
     }
@@ -448,6 +471,9 @@ static void _RouteFinishAlign(AppCarDef *pCar)
             pCar->finishAlignStableMs += APP_CAR_CONTROL_PERIOD_MS;
         }
         if (pCar->finishAlignStableMs >= APP_CAR_H2_FINISH_ALIGN_STABLE_MS) {
+            BspUart_Printf("[H2] align ok err=%ld iy=%ld\n",
+                (long)errorCd,
+                (long)pCar->imuLapYawCd);
             _SetRouteState(pCar, APP_CAR_ROUTE_COMPLETE);
         }
         return;
@@ -455,6 +481,11 @@ static void _RouteFinishAlign(AppCarDef *pCar)
 
     pCar->finishAlignStableMs = 0U;
     turnSpeed = APP_CAR_H2_FINISH_ALIGN_SPEED;
+    if ((APP_CAR_H2_FINISH_ALIGN_EXTRA_SPEED > 0) &&
+        (APP_CAR_H2_FINISH_ALIGN_DITHER_MS != 0U) &&
+        ((((pCar->routeStateMs / APP_CAR_H2_FINISH_ALIGN_DITHER_MS) & 0x01U) != 0U))) {
+        turnSpeed = (int16_t)(turnSpeed + APP_CAR_H2_FINISH_ALIGN_EXTRA_SPEED);
+    }
     if (((errorCd > 0) && (APP_CAR_H2_FINISH_ALIGN_DIRECTION > 0)) ||
         ((errorCd < 0) && (APP_CAR_H2_FINISH_ALIGN_DIRECTION < 0))) {
         turnSpeed = (int16_t)-turnSpeed;
@@ -555,6 +586,7 @@ static void _EnterStopped(AppCarDef *pCar)
     pCar->traceTurn = 0;
     pCar->traceState = (uint8_t)TRACE_STATE_SEARCHING;
     pCar->ballStableMs = 0U;
+    pCar->h2FinishForwardYawValid = 0U;
     pCar->timerRunning = 0U;
     BallControl_Reset(&pCar->ballControl);
     pCar->fatherState = APP_CAR_FATHER_STOPPED;
@@ -578,6 +610,7 @@ static void _EnterRunning(AppCarDef *pCar)
     pCar->leftCommand = 0;
     pCar->rightCommand = 0;
     pCar->ballStableMs = 0U;
+    pCar->h2FinishForwardYawValid = 0U;
     _ResetImuLap(pCar);
     pCar->fatherState = APP_CAR_FATHER_RUNNING;
     pCar->pFatherState = _FatherRunning;
@@ -1006,6 +1039,58 @@ static int16_t _AngleDeltaCd(int16_t nowCd, int16_t lastCd)
     }
 
     return (int16_t)delta;
+}
+
+static void _LockH2FinishForwardYaw(AppCarDef *pCar)
+{
+    if ((pCar->imuOnline != 0U) && (pCar->imuHasLastYaw != 0U)) {
+        pCar->h2FinishForwardYawCd = pCar->imuLapYawCd;
+        pCar->h2FinishForwardYawValid = 1U;
+    } else {
+        pCar->h2FinishForwardYawValid = 0U;
+    }
+}
+
+static void _RunH2FinishForward(AppCarDef *pCar)
+{
+    int16_t baseSpeed = APP_CAR_H2_FINISH_FORWARD_SPEED;
+    int16_t turnSpeed = 0;
+    int32_t errorCd;
+    int32_t turnAbs;
+
+    if ((pCar->h2FinishForwardYawValid != 0U) &&
+        (pCar->imuOnline != 0U) &&
+        (pCar->imuHasLastYaw != 0U)) {
+        errorCd = _H2FinishForwardErrorCd(pCar);
+        turnAbs = (_AbsI32(errorCd) * APP_CAR_H2_FINISH_FORWARD_KP_NUM) /
+            APP_CAR_H2_FINISH_FORWARD_KP_DEN;
+        if (turnAbs > APP_CAR_H2_FINISH_FORWARD_LIMIT) {
+            turnAbs = APP_CAR_H2_FINISH_FORWARD_LIMIT;
+        }
+        turnSpeed = (int16_t)turnAbs;
+        if (((errorCd > 0) && (APP_CAR_H2_FINISH_FORWARD_DIRECTION > 0)) ||
+            ((errorCd < 0) && (APP_CAR_H2_FINISH_FORWARD_DIRECTION < 0))) {
+            turnSpeed = (int16_t)-turnSpeed;
+        }
+    }
+
+    pCar->leftCommand = (int16_t)(baseSpeed - turnSpeed);
+    pCar->rightCommand = (int16_t)(baseSpeed + turnSpeed);
+    BspMotor_SetSignedSpeed(pCar->leftCommand, pCar->rightCommand);
+}
+
+static int32_t _H2FinishForwardErrorCd(const AppCarDef *pCar)
+{
+    int32_t errorCd = pCar->imuLapYawCd - pCar->h2FinishForwardYawCd;
+
+    while (errorCd > 18000L) {
+        errorCd -= 36000L;
+    }
+    while (errorCd < -18000L) {
+        errorCd += 36000L;
+    }
+
+    return errorCd;
 }
 
 static int32_t _H2HeadingErrorCd(const AppCarDef *pCar)
