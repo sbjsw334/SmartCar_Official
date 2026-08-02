@@ -13,6 +13,11 @@ typedef struct {
     uint32_t lastSampleMs;
     uint16_t lastPulseUs;
     uint8_t hasFrame;
+    uint8_t brakeZoneActive;
+    uint8_t brakeReverseActive;
+    int16_t brakeEntrySpeedMmPerSec;
+    int16_t brakeDynamicReverseMmPerSec;
+    int16_t brakeDynamicGainPercent;
 } BallControl_t;
 
 void BallControl_Init(BallControl_t *pControl);

@@ -8,13 +8,12 @@
 #include "bsp_servo.h"
 #include "bsp_uart.h"
 
-/* Track speeds: tune these four values at the field. */
+/* Track speeds: tune these values at the field. */
 #define APP_CAR_TRACE_SPEED_H2           (36)       /* H2 normal 8-sensor trace speed */
-#define APP_CAR_TRACE_SPEED_H4           (32)       /* H4 speed */
+#define APP_CAR_TRACE_SPEED_H4           (24)       /* H4 A->B稳球速度：先用24，车稳后再试26 */
 #define APP_CAR_TRACE_SPEED_H5           (28)       /* H5 speed */
-#define APP_CAR_TRACE_SPEED_H6           (26)       /* H6 speed */
 
-/* H2/H5/H6 lap protection. 13 PPR * 28 gear ratio * 4 edges. */
+/* H2/H5 lap protection. 13 PPR * 28 gear ratio * 4 edges. */
 #define APP_CAR_ENCODER_COUNTS_PER_REV   (13U * 28U * 4U)
 #define APP_CAR_WHEEL_CIRCUMFERENCE_MM   (204U)
 #define APP_CAR_LAP_LENGTH_MM            (6142U)
@@ -26,34 +25,37 @@
     ((APP_CAR_LAP_EXPECTED_PULSES * APP_CAR_LAP_GATE_PERCENT) / 100U)
 #define APP_CAR_FINISH_CONFIRM_MS        (30U)      /* H2: finish line must last 30 ms */
 #define APP_CAR_FINISH_SENSOR_MIN        (4U)       /* H2: 4+ black sensors means cross line */
-#define APP_CAR_FINISH_FOLLOW_MS         (400U)     /* H5/H6: keep old finish follow logic */
 
-/* H2 simple finish: 8-sensor trace -> finish line confirm -> gyro-straight -> brake -> JY61P align.
- * 第二题正常循迹不依赖陀螺仪；识别回A线后先锁当前航向直行，再用JY61P回正起始角度。
+/* H2 finish: trace -> finish line confirm -> gyro-straight -> brake -> JY61P align.
+ * Normal H2 tracing does not depend on the gyro. After detecting A again,
+ * lock the current gyro heading and drive straight before aligning back to start.
  */
-#define APP_CAR_H2_FINISH_FOLLOW_MS      (800U)     /* 第二题：识别回A线后沿当前方向前行时间，太短会早停，太长会冲过 */
+#define APP_CAR_H2_FINISH_FOLLOW_MS      (800U)     /* H2: after finish line, lock current gyro yaw and drive straight */
 #define APP_CAR_H2_FINISH_BRAKE_MS       (80U)      /* H2: reverse brake time */
 #define APP_CAR_H2_FINISH_BRAKE_SPEED    (20)       /* H2: reverse brake strength */
 #define APP_CAR_H2_FINISH_ALIGN_ENABLE   (1U)       /* 第二题：停车后是否用JY61P回到起始角度，0=关闭 */
-#define APP_CAR_H2_FINISH_ALIGN_ERROR_CD (100L)     /* 第二题：回正允许误差，100=1度；太小会抖，太大会看起来没回正 */
+#define APP_CAR_H2_FINISH_ALIGN_ERROR_CD (100L)     /* H2: final align tolerance, 100 = 1 degree */
 #define APP_CAR_H2_FINISH_ALIGN_STABLE_MS (100U)    /* 第二题：回正到位后保持时间 */
-#define APP_CAR_H2_FINISH_ALIGN_TIMEOUT_MS (860U)   /* 第二题：回正最长时间，差很多就加大，太久才结束就减小 */
-#define APP_CAR_H2_FINISH_ALIGN_SPEED    (16)       /* 第二题：原地回正速度；幅度太小就加大，过冲明显再减小 */
-#define APP_CAR_H2_FINISH_ALIGN_EXTRA_SPEED (1)     /* 第二题：16偏左、17偏右时设1，和16交替得到约16.5 */
-#define APP_CAR_H2_FINISH_ALIGN_DITHER_MS (20U)     /* 第二题：回正速度交替周期，保持20ms即可 */
+#define APP_CAR_H2_FINISH_ALIGN_TIMEOUT_MS (860U)   /* H2: final align timeout */
+#define APP_CAR_H2_FINISH_ALIGN_SPEED    (16)       /* H2: base rotate speed */
+#define APP_CAR_H2_FINISH_ALIGN_EXTRA_SPEED (1)     /* H2: dither 16/17 to get about 16.5 */
+#define APP_CAR_H2_FINISH_ALIGN_DITHER_MS (20U)     /* H2: align speed dither period */
 #define APP_CAR_H2_FINISH_ALIGN_DIRECTION (1)       /* 第二题：回正方向补偿，若越转越偏改成-1 */
-#define APP_CAR_H2_FINISH_FORWARD_SPEED  (APP_CAR_TRACE_SPEED_H2) /* 第二题：识别回A线后锁当前航向直行速度 */
-#define APP_CAR_H2_FINISH_FORWARD_KP_NUM (1)        /* 第二题：锁航向直行比例系数分子；转向不够就增大 */
-#define APP_CAR_H2_FINISH_FORWARD_KP_DEN (50)       /* 第二题：锁航向直行比例系数分母；转向太猛就增大 */
-#define APP_CAR_H2_FINISH_FORWARD_LIMIT  (12)       /* 第二题：锁航向直行最大差速修正，防止过猛 */
-#define APP_CAR_H2_FINISH_FORWARD_DIRECTION (1)     /* 第二题：锁航向直行方向补偿，若越修越偏改成-1 */
+#define APP_CAR_H2_FINISH_FORWARD_SPEED  (APP_CAR_TRACE_SPEED_H2)
+#define APP_CAR_H2_FINISH_FORWARD_KP_NUM (1)
+#define APP_CAR_H2_FINISH_FORWARD_KP_DEN (50)
+#define APP_CAR_H2_FINISH_FORWARD_LIMIT  (12)
+#define APP_CAR_H2_FINISH_FORWARD_DIRECTION (1)
 
 /* H4 parameters: A -> B with ball held near O.
  * H4调参只优先改下面这些值：
- * 1) H4_RAMP_MS：起步缓启动时间，越大越稳但越慢。
- * 2) H4_START_FF_MM：起步球位前馈，默认0；如果起步球总往同一边甩，再改正负和大小。
- * 3) H4_AB_LENGTH_MM / H4_AB_GATE_PERCENT：B点横线放行距离，防止刚出发误识别横线。
- * 4) H4_FINISH_FOLLOW_MS：过B停表后继续循迹时间，只为停车更柔，不计入H4时间。
+ * 1) APP_CAR_TRACE_SPEED_H4：A到B循迹速度，先用24求稳；球稳后可试26。
+ * 2) H4_RAMP_START_SPEED / H4_RAMP_MS：起步速度和缓启动时间，RAMP_MS越大越稳但越慢。
+ * 3) H4_START_READY_ERROR_MM / H4_START_READY_MS：START后球在中心附近稳定多久才允许发车。
+ * 4) H4_START_FF_MM：起步球位前馈，默认0；若起步球总往同一边甩，再在-15~+15mm内小步改。
+ * 5) A线忽略：H4刚起步遇到4路以上黑线连续30ms，只认为通过A线，继续循迹，不停表。
+ * 6) H4_AB_LENGTH_MM / H4_AB_GATE_PERCENT：B点横线放行距离，防止刚出发误识别横线。
+ * 7) H4_FINISH_FOLLOW_MS：过B停表后继续循迹时间，只为停车更柔，不计入H4时间。
  */
 #define APP_CAR_H4_AB_LENGTH_MM           (1500U)
 #define APP_CAR_H4_AB_EXPECTED_PULSES     \
@@ -62,8 +64,8 @@
 #define APP_CAR_H4_AB_GATE_PERCENT        (70U)
 #define APP_CAR_H4_AB_GATE_PULSES         \
     ((APP_CAR_H4_AB_EXPECTED_PULSES * APP_CAR_H4_AB_GATE_PERCENT) / 100U)
-#define APP_CAR_H4_RAMP_START_SPEED       (18)
-#define APP_CAR_H4_RAMP_MS                (900U)
+#define APP_CAR_H4_RAMP_START_SPEED       (16)
+#define APP_CAR_H4_RAMP_MS                (1000U)
 #define APP_CAR_H4_START_READY_ERROR_MM   (10)
 #define APP_CAR_H4_START_READY_MS         (200U)
 #define APP_CAR_H4_START_FF_MM            (0)
@@ -71,13 +73,48 @@
 #define APP_CAR_H4_START_FF_FADE_MS       (700U)
 #define APP_CAR_H4_FINISH_FOLLOW_MS       (300U)
 
+/* H5 parameters: one clockwise lap with ball held at O.
+ * 第五题只优先调下面这些值：
+ * 1) APP_CAR_TRACE_SPEED_H5：整圈循迹速度，先用28；若球晃先降到24~26，稳定后再提速。
+ * 2) H5_RAMP_START_SPEED / H5_RAMP_MS：起步缓启动，起步球甩就增大RAMP_MS。
+ * 3) H5_START_READY_ERROR_MM / H5_START_READY_MS：START后球在中心附近稳定多久才发车。
+ * 4) H5_HOLD_BIAS_MM：H5行驶中的球位目标偏置；球总往负方向偏，就把它调成正值。
+ * 5) H5_START_FF_MM：起步前馈；只在起步前1.2s左右叠加，抵消起步瞬间偏移。
+ * 6) H5_ACC_FF_*：用编码器速度变化估算车体加减速，只小幅修正球目标。
+ * 7) H5_LAP_GATE_PERCENT：一圈到80%以后才允许A横线作为终点，避免刚起步误判A线。
+ * 8) H5_FINISH_FOLLOW_MS：识别A线后停表，再继续循迹一点用于过线/柔停，不计入成绩时间。
+ */
+#define APP_CAR_H5_RAMP_START_SPEED       (18)
+#define APP_CAR_H5_RAMP_MS                (1200U)
+#define APP_CAR_H5_START_READY_ERROR_MM   (10)
+#define APP_CAR_H5_START_READY_MS         (200U)
+#define APP_CAR_H5_HOLD_BIAS_MM           (6)
+#define APP_CAR_H5_HOLD_BIAS_MIN_MM       (-30)
+#define APP_CAR_H5_HOLD_BIAS_MAX_MM       (30)
+#define APP_CAR_H5_START_FF_MM            (8)
+#define APP_CAR_H5_START_FF_HOLD_MS       (500U)
+#define APP_CAR_H5_START_FF_FADE_MS       (700U)
+#define APP_CAR_H5_ACC_FF_ENABLE          (1U)
+#define APP_CAR_H5_ACC_FF_DIRECTION       (1)
+#define APP_CAR_H5_ACC_FF_LIMIT_MM        (10)
+#define APP_CAR_H5_ACC_FF_DEAD_PPS        (2)
+#define APP_CAR_H5_ACC_FF_GAIN_NUM        (1)
+#define APP_CAR_H5_ACC_FF_GAIN_DEN        (4)
+#define APP_CAR_H5_SPEED_FILTER_DEN       (8)
+#define APP_CAR_H5_LAP_GATE_PERCENT       (80U)
+#define APP_CAR_H5_LAP_GATE_PULSES        \
+    ((APP_CAR_LAP_EXPECTED_PULSES * APP_CAR_H5_LAP_GATE_PERCENT) / 100U)
+#define APP_CAR_H5_FINISH_FOLLOW_MS       (400U)
+
 #define APP_CAR_TARGET_MIN_MM             (-100)
 #define APP_CAR_TARGET_MAX_MM             (100)
 #define APP_CAR_BALL_CENTER_MM            (0)
 #define APP_CAR_BALL_POSITIVE_MM          (50)
+#define APP_CAR_BALL_POSITIVE_HOLD_BIAS_MM (6)
+#define APP_CAR_BALL_POSITIVE_HOLD_MM     (APP_CAR_BALL_POSITIVE_MM + APP_CAR_BALL_POSITIVE_HOLD_BIAS_MM)
 #define APP_CAR_BALL_NEGATIVE_MM          (-50)
-#define APP_CAR_BALL_POSITIVE_CONTROL_MM  (53)
-#define APP_CAR_BALL_NEGATIVE_CONTROL_MM  (-58)
+#define APP_CAR_BALL_POSITIVE_CONTROL_MM  (50)
+#define APP_CAR_BALL_NEGATIVE_CONTROL_MM  (-50)
 #define APP_CAR_BALL_TARGET_POS_STEP_MM   (3)
 #define APP_CAR_BALL_TARGET_POS_PERIOD_MS (20U)
 #define APP_CAR_BALL_TARGET_NEG_STEP_MM   (3)
@@ -88,11 +125,14 @@
 #define APP_CAR_BALL_FINAL_SPEED_MM_PER_S (30)
 #define APP_CAR_BALL_FINAL_STABLE_MS      (180U)
 #define APP_CAR_BALL_FRAME_MS             (33U)
+#define APP_CAR_H3_TIME_LIMIT_MS          (5000U)
+#define APP_CAR_H3_FINISH_ERROR_MM        (10)
 
 static void _Init(AppCarDef *pCar);
 static void _Run(AppCarDef *pCar, MsgId_t msg);
 static void _SetMode(AppCarDef *pCar, AppCarMode_t mode);
 static void _SetBallTargetMm(AppCarDef *pCar, int16_t targetMm);
+static void _AdjustH5HoldBiasMm(AppCarDef *pCar, int16_t deltaMm);
 static AppCarFatherState_t _GetFatherState(const AppCarDef *pCar);
 static AppCarRouteState_t _GetRouteState(const AppCarDef *pCar);
 static AppCarBallState_t _GetBallState(const AppCarDef *pCar);
@@ -125,6 +165,7 @@ static void _SetBallState(AppCarDef *pCar, AppCarBallState_t state);
 static void _ConfigureChildren(AppCarDef *pCar);
 static void _RunChildren(AppCarDef *pCar);
 static void _SampleInputs(AppCarDef *pCar);
+static void _UpdateH5AccelFeedforward(AppCarDef *pCar);
 static void _RunTraceControl(AppCarDef *pCar);
 static void _RunBallControl(AppCarDef *pCar, int16_t targetMm);
 static int16_t _GetCurrentTraceSpeed(const AppCarDef *pCar);
@@ -157,6 +198,7 @@ AppCarConDef appCarCon = {
     .run = _Run,
     .setMode = _SetMode,
     .setBallTargetMm = _SetBallTargetMm,
+    .adjustH5HoldBiasMm = _AdjustH5HoldBiasMm,
     .getFatherState = _GetFatherState,
     .getRouteState = _GetRouteState,
     .getBallState = _GetBallState,
@@ -188,11 +230,14 @@ static void _Init(AppCarDef *pCar)
     pCar->ballStableMs = 0U;
     pCar->ballStableFrameSeq = 0U;
     pCar->ballTargetMm = 0;
-    pCar->lastBallTargetMm = 0;
     pCar->ballOffsetMm = 0;
     pCar->ballFrameSeq = 0U;
     pCar->leftSpeed = 0;
     pCar->rightSpeed = 0;
+    pCar->h5HoldBiasMm = APP_CAR_H5_HOLD_BIAS_MM;
+    pCar->h5SpeedFiltPps = 0;
+    pCar->h5LastSpeedFiltPps = 0;
+    pCar->h5AccelFfMm = 0;
     pCar->leftCount = 0;
     pCar->rightCount = 0;
     pCar->leftCommand = 0;
@@ -212,7 +257,7 @@ static void _Init(AppCarDef *pCar)
     _SampleInputs(pCar);
 
     BspUart_Printf("\n[H] state-machine foundation ready\n");
-    BspUart_Printf("[H] 2..6=mode, s=start, x=stop\n");
+    BspUart_Printf("[H] 2..5=mode, s=start, x=stop\n");
     BspUart_Printf("[K230] B,<offset_mm>,<valid>\\n\n");
     _PrintTelemetry(pCar);
 }
@@ -239,7 +284,7 @@ void AppCar_Tick1ms(AppCarDef *pCar)
 static void _SetMode(AppCarDef *pCar, AppCarMode_t mode)
 {
     if ((pCar == 0) ||
-        (mode > APP_CAR_MODE_BALANCE_LAP_TARGET) ||
+        (mode > APP_CAR_MODE_BALANCE_LAP_CENTER) ||
         (pCar->fatherState == APP_CAR_FATHER_RUNNING)) {
         return;
     }
@@ -248,6 +293,9 @@ static void _SetMode(AppCarDef *pCar, AppCarMode_t mode)
     if (mode == APP_CAR_MODE_BALL_STATIC) {
         pCar->ballTargetMm = APP_CAR_BALL_CENTER_MM;
         BallControl_Reset(&pCar->ballControl);
+    } else if (mode == APP_CAR_MODE_BALANCE_LAP_CENTER) {
+        pCar->ballTargetMm = pCar->h5HoldBiasMm;
+        BspServo_Center();
     } else {
         BspServo_Center();
     }
@@ -269,6 +317,29 @@ static void _SetBallTargetMm(AppCarDef *pCar, int16_t targetMm)
 
     pCar->ballTargetMm = targetMm;
     BspUart_Printf("[BALL] target=%d mm\n", (int)targetMm);
+}
+
+static void _AdjustH5HoldBiasMm(AppCarDef *pCar, int16_t deltaMm)
+{
+    int16_t biasMm;
+
+    if ((pCar == 0) || (pCar->mode != APP_CAR_MODE_BALANCE_LAP_CENTER)) {
+        return;
+    }
+
+    biasMm = (int16_t)(pCar->h5HoldBiasMm + deltaMm);
+    if (biasMm < APP_CAR_H5_HOLD_BIAS_MIN_MM) {
+        biasMm = APP_CAR_H5_HOLD_BIAS_MIN_MM;
+    } else if (biasMm > APP_CAR_H5_HOLD_BIAS_MAX_MM) {
+        biasMm = APP_CAR_H5_HOLD_BIAS_MAX_MM;
+    }
+
+    pCar->h5HoldBiasMm = biasMm;
+    pCar->ballTargetMm = biasMm;
+    BspUart_Printf("[H5T] bias=%d ball=%d af=%d\n",
+        (int)pCar->h5HoldBiasMm,
+        (int)pCar->ballOffsetMm,
+        (int)pCar->h5AccelFfMm);
 }
 
 static AppCarFatherState_t _GetFatherState(const AppCarDef *pCar)
@@ -294,10 +365,6 @@ static void _FatherStopped(AppCarDef *pCar, MsgId_t msg)
         _EnterFault(pCar);
     } else if (msg == MSG_CONTROL_TICK) {
         _SampleInputs(pCar);
-        if (pCar->mode == APP_CAR_MODE_BALL_STATIC) {
-            pCar->ballTargetMm = APP_CAR_BALL_CENTER_MM;
-            _RunBallControl(pCar, APP_CAR_BALL_CENTER_MM);
-        }
     } else if (msg == MSG_TELEMETRY_200MS) {
         _PrintTelemetry(pCar);
     }
@@ -361,6 +428,17 @@ static void _RouteLeaveStart(AppCarDef *pCar)
     int16_t speed;
 
     if (_IsFinishLine(pCar->gray) != 0U) {
+        if ((pCar->mode == APP_CAR_MODE_BALANCE_AB) ||
+            (pCar->mode == APP_CAR_MODE_BALANCE_LAP_CENTER)) {
+            if (pCar->finishLineMs < APP_CAR_FINISH_CONFIRM_MS) {
+                pCar->finishLineMs += APP_CAR_CONTROL_PERIOD_MS;
+            }
+            if (pCar->finishLineMs >= APP_CAR_FINISH_CONFIRM_MS) {
+                _SetRouteState(pCar, APP_CAR_ROUTE_TRACKING);
+                _RunTraceControl(pCar);
+                return;
+            }
+        }
         speed = _GetCurrentTraceSpeed(pCar);
         pCar->leftCommand = speed;
         pCar->rightCommand = speed;
@@ -384,7 +462,8 @@ static void _RouteTracking(AppCarDef *pCar)
                 _LockH2FinishForwardYaw(pCar);
                 _SetRouteState(pCar, APP_CAR_ROUTE_FINISH_ACTION);
             } else {
-                if (pCar->mode == APP_CAR_MODE_BALANCE_AB) {
+                if ((pCar->mode == APP_CAR_MODE_BALANCE_AB) ||
+                    (pCar->mode == APP_CAR_MODE_BALANCE_LAP_CENTER)) {
                     pCar->timerRunning = 0U;
                 }
                 _SetRouteState(pCar, APP_CAR_ROUTE_FINISH_ACTION);
@@ -513,8 +592,12 @@ static void _BallDisabled(AppCarDef *pCar)
 static void _BallWaitVision(AppCarDef *pCar)
 {
     int32_t ballErrorMm;
+    int32_t startReadyErrorMm;
+    uint16_t startReadyMs;
+    int16_t holdTargetMm;
 
-    if (pCar->mode != APP_CAR_MODE_BALANCE_AB) {
+    if ((pCar->mode != APP_CAR_MODE_BALANCE_AB) &&
+        (pCar->mode != APP_CAR_MODE_BALANCE_LAP_CENTER)) {
         BspServo_Center();
     }
 
@@ -524,18 +607,29 @@ static void _BallWaitVision(AppCarDef *pCar)
     }
 
     if (pCar->mode == APP_CAR_MODE_BALL_STATIC) {
-        pCar->ballTargetMm = pCar->ballOffsetMm;
-        _SetBallState(pCar, APP_CAR_BALL_MOVE_POSITIVE);
+        pCar->ballTargetMm = (int16_t)-APP_CAR_BALL_TARGET_NEG_STEP_MM;
+        /* H3 tuning flow: skip 0 hold, first run to -50, then measure -50 -> +50. */
+        _SetBallState(pCar, APP_CAR_BALL_MOVE_NEGATIVE);
     } else {
-        if (pCar->mode == APP_CAR_MODE_BALANCE_AB) {
-            pCar->ballTargetMm = APP_CAR_BALL_CENTER_MM;
-            _RunBallControl(pCar, APP_CAR_BALL_CENTER_MM);
+        if ((pCar->mode == APP_CAR_MODE_BALANCE_AB) ||
+            (pCar->mode == APP_CAR_MODE_BALANCE_LAP_CENTER)) {
+            if (pCar->mode == APP_CAR_MODE_BALANCE_LAP_CENTER) {
+                startReadyErrorMm = APP_CAR_H5_START_READY_ERROR_MM;
+                startReadyMs = APP_CAR_H5_START_READY_MS;
+                holdTargetMm = pCar->h5HoldBiasMm;
+            } else {
+                startReadyErrorMm = APP_CAR_H4_START_READY_ERROR_MM;
+                startReadyMs = APP_CAR_H4_START_READY_MS;
+                holdTargetMm = APP_CAR_BALL_CENTER_MM;
+            }
+            pCar->ballTargetMm = holdTargetMm;
+            _RunBallControl(pCar, holdTargetMm);
             ballErrorMm = _AbsI32((int32_t)pCar->ballOffsetMm);
-            if (ballErrorMm > APP_CAR_H4_START_READY_ERROR_MM) {
+            if (ballErrorMm > startReadyErrorMm) {
                 pCar->ballStableMs = 0U;
                 return;
             }
-            if (pCar->ballStableMs < APP_CAR_H4_START_READY_MS) {
+            if (pCar->ballStableMs < startReadyMs) {
                 pCar->ballStableMs += APP_CAR_CONTROL_PERIOD_MS;
                 return;
             }
@@ -548,25 +642,69 @@ static void _BallWaitVision(AppCarDef *pCar)
 static void _BallMovePositive(AppCarDef *pCar)
 {
     int16_t targetMm = _StepBallTargetMm(pCar, APP_CAR_BALL_POSITIVE_CONTROL_MM);
+    int16_t finishErrorMm;
+
     _RunBallControl(pCar, targetMm);
 
-    if ((targetMm == APP_CAR_BALL_POSITIVE_CONTROL_MM) &&
-        (_IsBallReached(pCar, APP_CAR_BALL_POSITIVE_MM) != 0U)) {
+    if (targetMm != APP_CAR_BALL_POSITIVE_CONTROL_MM) {
+        return;
+    }
+
+    if (pCar->ballValid == 0U) {
+        return;
+    }
+
+    finishErrorMm = (int16_t)(APP_CAR_BALL_POSITIVE_MM - pCar->ballOffsetMm);
+    if (finishErrorMm < 0) {
+        finishErrorMm = (int16_t)-finishErrorMm;
+    }
+
+    if ((pCar->mode == APP_CAR_MODE_BALL_STATIC) &&
+        (pCar->timerRunning != 0U) &&
+        (finishErrorMm <= APP_CAR_H3_FINISH_ERROR_MM)) {
+        pCar->timerRunning = 0U;
+        BspUart_Printf("[H3] competition finish t=%lu ms limit=%lu ms %s\n",
+            (unsigned long)pCar->elapsedMs,
+            (unsigned long)APP_CAR_H3_TIME_LIMIT_MS,
+            (pCar->elapsedMs <= APP_CAR_H3_TIME_LIMIT_MS) ? "OK" : "OVER");
+    }
+
+    if (_IsBallFinalStable(pCar, APP_CAR_BALL_POSITIVE_MM) != 0U) {
         _PrintBallStageResult(pCar, "+50", APP_CAR_BALL_POSITIVE_MM);
-        _SetBallState(pCar, APP_CAR_BALL_MOVE_NEGATIVE);
+        pCar->ballTargetMm = APP_CAR_BALL_POSITIVE_HOLD_MM;
+        _SetBallState(pCar, APP_CAR_BALL_HOLD_TARGET);
+        _EnterFinished(pCar);
     }
 }
 
 static void _BallMoveNegative(AppCarDef *pCar)
 {
     int16_t targetMm = _StepBallTargetMm(pCar, APP_CAR_BALL_NEGATIVE_CONTROL_MM);
+    int16_t errorMm;
+
     _RunBallControl(pCar, targetMm);
 
-    if ((targetMm == APP_CAR_BALL_NEGATIVE_CONTROL_MM) &&
-        (_IsBallFinalStable(pCar, APP_CAR_BALL_NEGATIVE_MM) != 0U)) {
+    if (targetMm != APP_CAR_BALL_NEGATIVE_CONTROL_MM) {
+        return;
+    }
+
+    if (pCar->ballValid == 0U) {
+        return;
+    }
+
+    errorMm = (int16_t)(APP_CAR_BALL_NEGATIVE_MM - pCar->ballOffsetMm);
+    if (errorMm < 0) {
+        errorMm = (int16_t)-errorMm;
+    }
+
+    if (errorMm <= APP_CAR_BALL_REACH_ERROR_MM) {
         _PrintBallStageResult(pCar, "-50", APP_CAR_BALL_NEGATIVE_MM);
-        _SetBallState(pCar, APP_CAR_BALL_HOLD_TARGET);
-        _EnterFinished(pCar);
+        pCar->ballControl.brakeZoneActive = 0U;
+        pCar->ballControl.brakeReverseActive = 0U;
+        pCar->ballControl.brakeEntrySpeedMmPerSec = 0;
+        pCar->ballControl.brakeDynamicReverseMmPerSec = 0;
+        pCar->ballControl.brakeDynamicGainPercent = 100;
+        _SetBallState(pCar, APP_CAR_BALL_MOVE_POSITIVE);
     }
 }
 
@@ -585,8 +723,11 @@ static void _EnterStopped(AppCarDef *pCar)
     pCar->rightCommand = 0;
     pCar->traceTurn = 0;
     pCar->traceState = (uint8_t)TRACE_STATE_SEARCHING;
-    pCar->ballStableMs = 0U;
+    pCar->h5SpeedFiltPps = 0;
+    pCar->h5LastSpeedFiltPps = 0;
+    pCar->h5AccelFfMm = 0;
     pCar->h2FinishForwardYawValid = 0U;
+    pCar->ballStableMs = 0U;
     pCar->timerRunning = 0U;
     BallControl_Reset(&pCar->ballControl);
     pCar->fatherState = APP_CAR_FATHER_STOPPED;
@@ -601,6 +742,9 @@ static void _EnterRunning(AppCarDef *pCar)
     pCar->routePulses = 0U;
     pCar->leftCount = 0;
     pCar->rightCount = 0;
+    pCar->h5SpeedFiltPps = 0;
+    pCar->h5LastSpeedFiltPps = 0;
+    pCar->h5AccelFfMm = 0;
     pCar->timerRunning = 1U;
     BspEncoder_Reset();
     BspMotor_Stop();
@@ -714,7 +858,11 @@ static void _ConfigureChildren(AppCarDef *pCar)
     } else {
         if ((pCar->mode == APP_CAR_MODE_BALANCE_AB) ||
             (pCar->mode == APP_CAR_MODE_BALANCE_LAP_CENTER)) {
-            pCar->ballTargetMm = 0;
+            if (pCar->mode == APP_CAR_MODE_BALANCE_LAP_CENTER) {
+                pCar->ballTargetMm = pCar->h5HoldBiasMm;
+            } else {
+                pCar->ballTargetMm = APP_CAR_BALL_CENTER_MM;
+            }
         }
         _SetRouteState(pCar, APP_CAR_ROUTE_DISABLED);
         _SetBallState(pCar, APP_CAR_BALL_WAIT_VISION);
@@ -758,6 +906,51 @@ static void _SampleInputs(AppCarDef *pCar)
     pCar->imuValid = imu.valid;
     pCar->imuOnline = imu.online;
     _UpdateImuLap(pCar, &imu);
+    _UpdateH5AccelFeedforward(pCar);
+}
+
+static void _UpdateH5AccelFeedforward(AppCarDef *pCar)
+{
+    int32_t avgSpeedPps;
+    int32_t speedFiltPps;
+    int32_t accelPps;
+    int32_t ffMm;
+
+    if ((APP_CAR_H5_ACC_FF_ENABLE == 0U) ||
+        (pCar->mode != APP_CAR_MODE_BALANCE_LAP_CENTER) ||
+        (pCar->fatherState != APP_CAR_FATHER_RUNNING) ||
+        ((pCar->routeState != APP_CAR_ROUTE_LEAVE_START) &&
+         (pCar->routeState != APP_CAR_ROUTE_TRACKING))) {
+        pCar->h5AccelFfMm = 0;
+        return;
+    }
+
+    avgSpeedPps = ((int32_t)pCar->leftSpeed + (int32_t)pCar->rightSpeed) / 2L;
+    speedFiltPps =
+        (((int32_t)pCar->h5SpeedFiltPps *
+          (int32_t)(APP_CAR_H5_SPEED_FILTER_DEN - 1U)) + avgSpeedPps) /
+        (int32_t)APP_CAR_H5_SPEED_FILTER_DEN;
+    accelPps = speedFiltPps - (int32_t)pCar->h5LastSpeedFiltPps;
+
+    pCar->h5SpeedFiltPps = (int16_t)speedFiltPps;
+    pCar->h5LastSpeedFiltPps = (int16_t)speedFiltPps;
+
+    if (_AbsI32(accelPps) <= APP_CAR_H5_ACC_FF_DEAD_PPS) {
+        pCar->h5AccelFfMm = 0;
+        return;
+    }
+
+    ffMm = (accelPps * (int32_t)APP_CAR_H5_ACC_FF_GAIN_NUM) /
+        (int32_t)APP_CAR_H5_ACC_FF_GAIN_DEN;
+    ffMm *= (int32_t)APP_CAR_H5_ACC_FF_DIRECTION;
+
+    if (ffMm > APP_CAR_H5_ACC_FF_LIMIT_MM) {
+        ffMm = APP_CAR_H5_ACC_FF_LIMIT_MM;
+    } else if (ffMm < -APP_CAR_H5_ACC_FF_LIMIT_MM) {
+        ffMm = -APP_CAR_H5_ACC_FF_LIMIT_MM;
+    }
+
+    pCar->h5AccelFfMm = (int16_t)ffMm;
 }
 
 static void _RunTraceControl(AppCarDef *pCar)
@@ -775,28 +968,7 @@ static void _RunTraceControl(AppCarDef *pCar)
 
 static void _RunBallControl(AppCarDef *pCar, int16_t targetMm)
 {
-    uint16_t pulseUs;
-
-    int16_t ffMmPerSec = 0;
-
-    /* 目标与上一帧相同 = 爬坡已结束，允许刹车；
-     * 爬坡途中误差小是"跟得住"，不是"要到站"，此时刹车会拖慢跟随 */
-    if (targetMm == pCar->lastBallTargetMm) {
-        BallControl_SetTargetSettled(&pCar->ballControl, 1U);
-    } else {
-        BallControl_SetTargetSettled(&pCar->ballControl, 0U);
-        /* 爬坡中：把斜坡速度前馈给控制器。
-         * 斜坡是 STEP_MM 每 PERIOD_MS，方向由目标变化的符号决定 */
-        ffMmPerSec = (int16_t)(((int32_t)APP_CAR_BALL_TARGET_POS_STEP_MM *
-            1000L) / (int32_t)APP_CAR_BALL_TARGET_POS_PERIOD_MS);
-        if (targetMm < pCar->lastBallTargetMm) {
-            ffMmPerSec = (int16_t)-ffMmPerSec;
-        }
-    }
-    BallControl_SetFeedforward(&pCar->ballControl, ffMmPerSec);
-    pCar->lastBallTargetMm = targetMm;
-
-    pulseUs = BallControl_Update(&pCar->ballControl,
+    uint16_t pulseUs = BallControl_Update(&pCar->ballControl,
         targetMm, pCar->ballOffsetMm, pCar->ballFrameSeq,
         pCar->uptimeMs, pCar->ballValid);
 
@@ -811,17 +983,24 @@ static int16_t _GetCurrentTraceSpeed(const AppCarDef *pCar)
     int32_t speed;
 
     targetSpeed = _GetTraceSpeed(pCar->mode);
-    if ((pCar->mode != APP_CAR_MODE_BALANCE_AB) ||
-        (pCar->fatherState != APP_CAR_FATHER_RUNNING)) {
+    if (pCar->fatherState != APP_CAR_FATHER_RUNNING) {
         return targetSpeed;
     }
 
-    startSpeed = APP_CAR_H4_RAMP_START_SPEED;
+    if (pCar->mode == APP_CAR_MODE_BALANCE_AB) {
+        startSpeed = APP_CAR_H4_RAMP_START_SPEED;
+        rampMs = APP_CAR_H4_RAMP_MS;
+    } else if (pCar->mode == APP_CAR_MODE_BALANCE_LAP_CENTER) {
+        startSpeed = APP_CAR_H5_RAMP_START_SPEED;
+        rampMs = APP_CAR_H5_RAMP_MS;
+    } else {
+        return targetSpeed;
+    }
+
     if (startSpeed > targetSpeed) {
         startSpeed = targetSpeed;
     }
 
-    rampMs = APP_CAR_H4_RAMP_MS;
     if ((rampMs == 0U) || (pCar->routeStateMs >= rampMs)) {
         return targetSpeed;
     }
@@ -835,13 +1014,26 @@ static int16_t _GetCurrentTraceSpeed(const AppCarDef *pCar)
 static int16_t _GetBallHoldTargetMm(const AppCarDef *pCar)
 {
     int32_t targetMm = pCar->ballTargetMm;
-    int32_t feedforwardMm = APP_CAR_H4_START_FF_MM;
+    int32_t feedforwardMm = 0;
+    int32_t accelFfMm = 0;
     uint32_t tMs;
-    uint32_t fadeMs;
-    uint32_t holdMs;
+    uint32_t fadeMs = 0U;
+    uint32_t holdMs = 0U;
 
-    if ((pCar->mode != APP_CAR_MODE_BALANCE_AB) ||
-        (pCar->fatherState != APP_CAR_FATHER_RUNNING)) {
+    if (pCar->fatherState != APP_CAR_FATHER_RUNNING) {
+        return _ClampBallTargetMm((int16_t)targetMm);
+    }
+
+    if (pCar->mode == APP_CAR_MODE_BALANCE_AB) {
+        feedforwardMm = APP_CAR_H4_START_FF_MM;
+        holdMs = APP_CAR_H4_START_FF_HOLD_MS;
+        fadeMs = APP_CAR_H4_START_FF_FADE_MS;
+    } else if (pCar->mode == APP_CAR_MODE_BALANCE_LAP_CENTER) {
+        feedforwardMm = APP_CAR_H5_START_FF_MM;
+        holdMs = APP_CAR_H5_START_FF_HOLD_MS;
+        fadeMs = APP_CAR_H5_START_FF_FADE_MS;
+        accelFfMm = pCar->h5AccelFfMm;
+    } else {
         return _ClampBallTargetMm((int16_t)targetMm);
     }
 
@@ -850,8 +1042,6 @@ static int16_t _GetBallHoldTargetMm(const AppCarDef *pCar)
         return _ClampBallTargetMm((int16_t)targetMm);
     }
 
-    holdMs = APP_CAR_H4_START_FF_HOLD_MS;
-    fadeMs = APP_CAR_H4_START_FF_FADE_MS;
     tMs = pCar->routeStateMs;
 
     if (tMs < holdMs) {
@@ -860,6 +1050,8 @@ static int16_t _GetBallHoldTargetMm(const AppCarDef *pCar)
         targetMm += (feedforwardMm * (int32_t)((holdMs + fadeMs) - tMs)) /
             (int32_t)fadeMs;
     }
+
+    targetMm += accelFfMm;
 
     return _ClampBallTargetMm((int16_t)targetMm);
 }
@@ -880,8 +1072,11 @@ static uint16_t _GetFinishFollowMs(AppCarMode_t mode)
     if (mode == APP_CAR_MODE_BALANCE_AB) {
         return APP_CAR_H4_FINISH_FOLLOW_MS;
     }
+    if (mode == APP_CAR_MODE_BALANCE_LAP_CENTER) {
+        return APP_CAR_H5_FINISH_FOLLOW_MS;
+    }
 
-    return APP_CAR_FINISH_FOLLOW_MS;
+    return APP_CAR_H2_FINISH_FOLLOW_MS;
 }
 
 static int16_t _StepBallTargetMm(AppCarDef *pCar, int16_t finalTargetMm)
@@ -1092,7 +1287,6 @@ static int32_t _H2FinishForwardErrorCd(const AppCarDef *pCar)
 
     return errorCd;
 }
-
 static int32_t _H2HeadingErrorCd(const AppCarDef *pCar)
 {
     int32_t errorCd = pCar->imuLapYawCd;
@@ -1110,12 +1304,14 @@ static int32_t _H2HeadingErrorCd(const AppCarDef *pCar)
 static void _ResetImuLap(AppCarDef *pCar)
 {
     pCar->imuLapYawCd = 0;
+    pCar->h2FinishForwardYawCd = 0;
     pCar->imuYawCd = 0;
     pCar->imuLastYawCd = 0;
     pCar->imuSampleSeq = 0U;
     pCar->imuValid = 0U;
     pCar->imuOnline = 0U;
     pCar->imuHasLastYaw = 0U;
+    pCar->h2FinishForwardYawValid = 0U;
 }
 
 static void _UpdateImuLap(AppCarDef *pCar, const BspJy61pData_t *pImu)
@@ -1145,7 +1341,10 @@ static void _UpdateImuLap(AppCarDef *pCar, const BspJy61pData_t *pImu)
 static uint8_t _CanFinishByRouteGate(const AppCarDef *pCar)
 {
     if (pCar->mode == APP_CAR_MODE_BALANCE_AB) {
-        return 0U;
+        return (uint8_t)(pCar->routePulses >= APP_CAR_H4_AB_GATE_PULSES);
+    }
+    if (pCar->mode == APP_CAR_MODE_BALANCE_LAP_CENTER) {
+        return (uint8_t)(pCar->routePulses >= APP_CAR_H5_LAP_GATE_PULSES);
     }
 
     if (pCar->routePulses < APP_CAR_LAP_GATE_PULSES) {
@@ -1161,7 +1360,7 @@ static void _PrintTelemetry(const AppCarDef *pCar)
 
     BspK230_GetDebug(&k230Debug);
     BspUart_Printf(
-        "[T] f=%u r=%u b=%u mode=%u time=%lu target=%dmm ball=%d/%u gray=%02X enc=%d,%d count=%ld,%ld lap=%lu iy=%ld/%d/%u/%u cmd=%d,%d tr=%d/%u q=%u k=%lu,%lu,%lu,%lu\n",
+        "[T] f=%u r=%u b=%u mode=%u time=%lu target=%dmm ball=%d/%u h5b=%d h5af=%d gray=%02X enc=%d,%d count=%ld,%ld lap=%lu iy=%ld/%d/%u/%u cmd=%d,%d tr=%d/%u q=%u k=%lu,%lu,%lu,%lu\n",
         (unsigned)pCar->fatherState,
         (unsigned)pCar->routeState,
         (unsigned)pCar->ballState,
@@ -1170,6 +1369,8 @@ static void _PrintTelemetry(const AppCarDef *pCar)
         (int)pCar->ballTargetMm,
         (int)pCar->ballOffsetMm,
         (unsigned)pCar->ballValid,
+        (int)pCar->h5HoldBiasMm,
+        (int)pCar->h5AccelFfMm,
         (unsigned)pCar->gray,
         (int)pCar->leftSpeed,
         (int)pCar->rightSpeed,
@@ -1189,20 +1390,6 @@ static void _PrintTelemetry(const AppCarDef *pCar)
         (unsigned long)k230Debug.pollBytes,
         (unsigned long)k230Debug.lines,
         (unsigned long)k230Debug.parsed);
-
-    /* H3 控制器诊断：dt 是视觉帧真实间隔，speed 死了刹车就是摆设 */
-    if (pCar->mode == APP_CAR_MODE_BALL_STATIC) {
-        BspUart_Printf(
-            "[C] dt=%u spd=%d tspd=%d out=%d i=%d set=%u rej=%u err=%d\n",
-            (unsigned)BallControl_GetDtMs(&pCar->ballControl),
-            (int)BallControl_GetSpeedMmPerSec(&pCar->ballControl),
-            (int)pCar->ballControl.targetSpeedMmPerSec,
-            (int)BallControl_GetOutputUs(&pCar->ballControl),
-            (int)BallControl_GetIntegralUs(&pCar->ballControl),
-            (unsigned)pCar->ballControl.targetSettled,
-            (unsigned)BallControl_GetRejectCount(&pCar->ballControl),
-            (int)(pCar->ballTargetMm - pCar->ballOffsetMm));
-    }
 }
 
 static int16_t _GetTraceSpeed(AppCarMode_t mode)
@@ -1212,8 +1399,6 @@ static int16_t _GetTraceSpeed(AppCarMode_t mode)
             return APP_CAR_TRACE_SPEED_H4;
         case APP_CAR_MODE_BALANCE_LAP_CENTER:
             return APP_CAR_TRACE_SPEED_H5;
-        case APP_CAR_MODE_BALANCE_LAP_TARGET:
-            return APP_CAR_TRACE_SPEED_H6;
         case APP_CAR_MODE_TRACE_ONLY:
         case APP_CAR_MODE_BALL_STATIC:
         default:

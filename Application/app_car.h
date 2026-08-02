@@ -41,7 +41,6 @@ typedef enum {
     APP_CAR_MODE_BALL_STATIC,
     APP_CAR_MODE_BALANCE_AB,
     APP_CAR_MODE_BALANCE_LAP_CENTER,
-    APP_CAR_MODE_BALANCE_LAP_TARGET,
 } AppCarMode_t;
 
 typedef void (*AppCarFatherStateHandler_t)(AppCarDef *pCar, MsgId_t msg);
@@ -72,11 +71,14 @@ struct _AppCarDef {
     uint16_t ballStableMs;
     uint32_t ballStableFrameSeq;
     int16_t ballTargetMm;
-    int16_t lastBallTargetMm;   /* 上一帧目标，用于判断爬坡是否结束 */
     int16_t ballOffsetMm;
     uint32_t ballFrameSeq;
     int16_t leftSpeed;
     int16_t rightSpeed;
+    int16_t h5HoldBiasMm;
+    int16_t h5SpeedFiltPps;
+    int16_t h5LastSpeedFiltPps;
+    int16_t h5AccelFfMm;
     int32_t leftCount;
     int32_t rightCount;
     int16_t leftCommand;
@@ -100,6 +102,7 @@ typedef struct {
     void (*run)(AppCarDef *pCar, MsgId_t msg);
     void (*setMode)(AppCarDef *pCar, AppCarMode_t mode);
     void (*setBallTargetMm)(AppCarDef *pCar, int16_t targetMm);
+    void (*adjustH5HoldBiasMm)(AppCarDef *pCar, int16_t deltaMm);
     AppCarFatherState_t (*getFatherState)(const AppCarDef *pCar);
     AppCarRouteState_t (*getRouteState)(const AppCarDef *pCar);
     AppCarBallState_t (*getBallState)(const AppCarDef *pCar);

@@ -121,10 +121,6 @@ static void _ProcessDebugCommands(void)
                 appCarCon.setMode(&appCarMain, APP_CAR_MODE_BALANCE_LAP_CENTER);
                 break;
 
-            case '6':
-                appCarCon.setMode(&appCarMain, APP_CAR_MODE_BALANCE_LAP_TARGET);
-                break;
-
             case 's':
             case 'S':
                 (void)MsgMap_Post(MSG_KEY_START);
@@ -152,20 +148,28 @@ static void _ProcessKeyEvents(void)
     if ((events & BSP_KEY_EVENT_MODE) != 0U) {
         AppCarMode_t mode = (AppCarMode_t)(appCarMain.mode + 1U);
 
-        if (mode > APP_CAR_MODE_BALANCE_LAP_TARGET) {
+        if (mode > APP_CAR_MODE_BALANCE_LAP_CENTER) {
             mode = APP_CAR_MODE_TRACE_ONLY;
         }
         appCarCon.setMode(&appCarMain, mode);
     }
 
     if ((events & BSP_KEY_EVENT_PLUS) != 0U) {
-        appCarCon.setBallTargetMm(&appCarMain,
-            (int16_t)(appCarMain.ballTargetMm + 10));
+        if (appCarMain.mode == APP_CAR_MODE_BALANCE_LAP_CENTER) {
+            appCarCon.adjustH5HoldBiasMm(&appCarMain, 2);
+        } else {
+            appCarCon.setBallTargetMm(&appCarMain,
+                (int16_t)(appCarMain.ballTargetMm + 10));
+        }
     }
 
     if ((events & BSP_KEY_EVENT_MINUS) != 0U) {
-        appCarCon.setBallTargetMm(&appCarMain,
-            (int16_t)(appCarMain.ballTargetMm - 10));
+        if (appCarMain.mode == APP_CAR_MODE_BALANCE_LAP_CENTER) {
+            appCarCon.adjustH5HoldBiasMm(&appCarMain, -2);
+        } else {
+            appCarCon.setBallTargetMm(&appCarMain,
+                (int16_t)(appCarMain.ballTargetMm - 10));
+        }
     }
 }
 

@@ -1,5 +1,7 @@
 #include "ball_control.h"
 
+#include "bsp_uart.h"
+
 /*
  * H3 钢球控制调参面板
  *
@@ -57,12 +59,12 @@
 // 调大：在更大的范围内都会给最小推力
 // 调小：只在更远的距离才给最小推力
 
-#define BALL_CONTROL_MIN_OUTPUT_POS_US             (90)
+#define BALL_CONTROL_MIN_OUTPUT_POS_US             (0)
 // 正方向最小推力：+90 μs
 // 作用：当球从 -30mm 向 0mm 移动时，如果推不动就增大此值
 // 如果推过头（直接冲过0），就减小此值
 
-#define BALL_CONTROL_MIN_OUTPUT_NEG_US             (70)
+#define BALL_CONTROL_MIN_OUTPUT_NEG_US             (0)
 // 负方向最小推力：-70 μs
 // 作用：当球从 +50mm 向 -50mm 移动时，如果停在 -30mm 推不动就增大此值
 // 如果直接冲过 -50mm，就减小此值
@@ -76,22 +78,22 @@
 #define BALL_CONTROL_NEG_WEAK_MM                   (-80)
 // 正强区边界：+80mm，负弱区边界：-80mm
 
-#define BALL_CONTROL_GAIN_FAR_POS_PERCENT          (70)
+#define BALL_CONTROL_GAIN_FAR_POS_PERCENT          (100)
 // 球在 +80mm 以外（正远端）：舵机力矩最大，输出衰减到 70%
 // 如果 +100mm 附近拉不回来，增大此值（70→80）
 // 如果 +100mm 附近太猛，减小此值（70→60）
 
-#define BALL_CONTROL_GAIN_MID_POS_PERCENT          (90)
+#define BALL_CONTROL_GAIN_MID_POS_PERCENT          (100)
 // 球在 0~+80mm（正中段）：舵机力矩较强，输出衰减到 90%
 // 如果正半区反应慢，增大此值（90→100）
 // 如果正半区来回晃，减小此值（90→80）
 
-#define BALL_CONTROL_GAIN_MID_NEG_PERCENT          (135)
+#define BALL_CONTROL_GAIN_MID_NEG_PERCENT          (100)
 // 球在 -80~0mm（负中段）：舵机力矩较弱，输出增强到 135%
 // 如果负半区回调慢、推不动，增大此值（135→145）
 // 如果负半区来回晃，减小此值（135→125）
 
-#define BALL_CONTROL_GAIN_FAR_NEG_PERCENT          (140)
+#define BALL_CONTROL_GAIN_FAR_NEG_PERCENT          (100)
 // 球在 -80mm 以外（负远端）：舵机力矩最弱，输出增强到 140%
 // 如果 -80~-115mm 拉不回来，增大此值（140→150）
 // 如果 -80~-115mm 冲太多，减小此值（140→130）
@@ -99,34 +101,76 @@
 
 /* ==================== 5) 近目标软控制 ==================== */
 // 作用：当球接近目标时，削弱控制，防止震荡，实现平稳收敛
-#define BALL_CONTROL_DEAD_ZONE_MM                  (5)
+#define BALL_CONTROL_DEAD_ZONE_MM                  (2)
 // 死区：|偏差| ≤ 5mm 且速度很慢时，输出强制为0
 // 如果目标附近一直小抖，增大此值（5→6/7）
 // 如果停得太早（误差偏大），减小此值（5→4/3）
 
-#define BALL_CONTROL_DEAD_ZONE_SPEED_MM_PER_S      (20)
+#define BALL_CONTROL_DEAD_ZONE_SPEED_MM_PER_S      (30)
 // 死区速度条件：|速度| ≤ 20mm/s 才进入死区
 // 如果目标附近还在抖，增大此值（20→30）
 // 如果进目标时刹不住，减小此值（20→10）
 
-#define BALL_CONTROL_SOFT_ZONE_MM                  (12)
+#define BALL_CONTROL_SOFT_ZONE_MM                  (0)
 // 软区范围：|偏差| ≤ 12mm 进入软区
 // 调大：更早开始温柔控制（更平滑）
 // 调小：更晚开始温柔控制（响应更快）
 
-#define BALL_CONTROL_SOFT_ZONE_GAIN_PERCENT        (70)
+#define BALL_CONTROL_SOFT_ZONE_GAIN_PERCENT        (100)
 // 软区输出比例：输出衰减到 70%
 // 如果接近目标但不收敛，增大此值（70→80）
 // 如果接近目标还冲来冲去，减小此值（70→60）
 
-#define BALL_CONTROL_SOFT_ZONE_LIMIT_US            (110)
+#define BALL_CONTROL_SOFT_ZONE_LIMIT_US            (500)
 // 软区最大输出：±110 μs
 // 如果近目标推不动，增大此值（110→130）
 // 如果近目标晃幅大，减小此值（110→90）
 
 
-/* ==================== 6) 舵机输出变化率限制 ==================== */
-#define BALL_CONTROL_OUTPUT_STEP_LIMIT_US          (70)
+/* ==================== 6) 提前刹车（远处猛推，近处提前收） ==================== */
+// 作用：解决"力度够但收不住"——球快到目标时先反向刹车，而不是冲过去再拉回来
+// 这不是D项，而是用视觉算出的球速做提前收力（老师说的只用PI不冲突）
+/* 刹车只在目标已经到 +/-50 后启用，避免 target=0/-5 的过渡段误触发。 */
+#define BALL_CONTROL_BRAKE_TARGET_ACTIVE_MM        (50)
+
+/* 第一阶段 0 -> -50：根据每次进入 -30mm 附近的速度动态算刹车。
+ * 入口速度 <=60mm/s：基本不反推，只轻微衰减。
+ * 入口速度越高：反向目标速度越大、目标速度衰减越强。
+ */
+#define BALL_CONTROL_BRAKE_NEG_ZONE_MM             (20)
+#define BALL_CONTROL_BRAKE_NEG_ENTRY_MIN_MM_PER_S  (90)
+#define BALL_CONTROL_BRAKE_NEG_REVERSE_DIV         (8)
+#define BALL_CONTROL_BRAKE_NEG_REVERSE_MAX_MM_PER_S (20)
+#define BALL_CONTROL_BRAKE_NEG_GAIN_MAX_PERCENT    (98)
+#define BALL_CONTROL_BRAKE_NEG_GAIN_MIN_PERCENT    (80)
+#define BALL_CONTROL_BRAKE_NEG_GAIN_DIV            (10)
+
+/* 第二阶段 -50 -> +50：10次实测进入 +30mm 附近速度多在 76~125mm/s。
+ * 比第一阶段更温和：只拦快冲，避免把球刹回 +40。
+ */
+#define BALL_CONTROL_BRAKE_POS_ZONE_MM             (0)
+#define BALL_CONTROL_BRAKE_POS_ENTRY_MIN_MM_PER_S  (70)
+#define BALL_CONTROL_BRAKE_POS_REVERSE_DIV         (5)
+#define BALL_CONTROL_BRAKE_POS_REVERSE_MAX_MM_PER_S (35)
+#define BALL_CONTROL_BRAKE_POS_GAIN_MAX_PERCENT    (92)
+#define BALL_CONTROL_BRAKE_POS_GAIN_MIN_PERCENT    (60)
+#define BALL_CONTROL_BRAKE_POS_GAIN_DIV            (6)
+#define BALL_CONTROL_BRAKE_PROBE_LOG_ENABLE        (1U)
+
+#define BALL_CONTROL_POS_TARGET_MM                  (50)
+#define BALL_CONTROL_POS_CATCH_ZONE_MM              (25)
+#define BALL_CONTROL_POS_CATCH_FINE_ZONE_MM         (10)
+#define BALL_CONTROL_POS_CATCH_KP_NUM               (2)
+#define BALL_CONTROL_POS_CATCH_KP_DEN               (1)
+#define BALL_CONTROL_POS_CATCH_SPEED_LIMIT_MM_PER_S (32)
+#define BALL_CONTROL_POS_CATCH_FINE_SPEED_LIMIT_MM_PER_S (22)
+#define BALL_CONTROL_POS_CATCH_OUTPUT_LIMIT_US      (100)
+#define BALL_CONTROL_POS_CATCH_FINE_OUTPUT_LIMIT_US (90)
+
+
+
+/* ==================== 7) 舵机输出变化率限制 ==================== */
+#define BALL_CONTROL_OUTPUT_STEP_LIMIT_US          (500)
 // 每帧（每次视觉数据更新）舵机脉宽最大变化量：±70 μs
 // 调小：控制更平滑，但响应更慢（有延迟）
 // 调大：响应更快，但更容易抖动/震荡
@@ -185,6 +229,9 @@ static int16_t _GetPositionGainPercent(int16_t ballMm);
 static int16_t _ApplyMinimumOutput(int16_t outputUs, int16_t errorMm);
 static int16_t _ApplyNearTargetControl(int16_t outputUs, int16_t errorMm,
     int16_t ballSpeedMmPerSec);
+static int16_t _ApplyBrakeZone(BallControl_t *pControl,
+    int16_t targetSpeedMmPerSec, int16_t targetMm, int16_t ballMm,
+    int16_t errorMm, int16_t ballSpeedMmPerSec);
 static int16_t _ApplyOutputStepLimit(const BallControl_t *pControl,
     int16_t outputUs);
 static int16_t _CalcInnerOutputUs(const BallControl_t *pControl,
@@ -208,6 +255,11 @@ void BallControl_Reset(BallControl_t *pControl)
     pControl->lastSampleMs = 0U;
     pControl->lastPulseUs = BSP_SERVO_PULSE_CENTER_US;
     pControl->hasFrame = 0U;
+    pControl->brakeZoneActive = 0U;
+    pControl->brakeReverseActive = 0U;
+    pControl->brakeEntrySpeedMmPerSec = 0;
+    pControl->brakeDynamicReverseMmPerSec = 0;
+    pControl->brakeDynamicGainPercent = 100;
 }
 
 uint16_t BallControl_Update(BallControl_t *pControl,
@@ -233,11 +285,8 @@ uint16_t BallControl_Update(BallControl_t *pControl,
     }
 
     positionErrorMm = (int16_t)(targetMm - ballMm);
-    pControl->targetSpeedMmPerSec = _LimitSigned(
-        ((int32_t)positionErrorMm * BALL_CONTROL_OUTER_KP_NUM) /
-            BALL_CONTROL_OUTER_KP_DEN,
-        BALL_CONTROL_TARGET_SPEED_LIMIT_MM_PER_S);
 
+    /* 先算球速：提前刹车要用它来判断"是不是正在冲向目标" */
     if (pControl->hasFrame != 0U) {
         sampleMs = nowMs - pControl->lastSampleMs;
         if ((sampleMs >= BALL_CONTROL_SAMPLE_MIN_MS) &&
@@ -252,6 +301,17 @@ uint16_t BallControl_Update(BallControl_t *pControl,
     } else {
         pControl->ballSpeedMmPerSec = 0;
     }
+
+    /* 位置环：误差 -> 目标速度 */
+    pControl->targetSpeedMmPerSec = _LimitSigned(
+        ((int32_t)positionErrorMm * BALL_CONTROL_OUTER_KP_NUM) /
+            BALL_CONTROL_OUTER_KP_DEN,
+        BALL_CONTROL_TARGET_SPEED_LIMIT_MM_PER_S);
+
+    /* 提前刹车：接近目标且冲得太快时，收力甚至反向 */
+    pControl->targetSpeedMmPerSec = _ApplyBrakeZone(pControl,
+        pControl->targetSpeedMmPerSec, targetMm, ballMm, positionErrorMm,
+        pControl->ballSpeedMmPerSec);
 
     speedErrorMmPerSec = (int16_t)(
         pControl->targetSpeedMmPerSec - pControl->ballSpeedMmPerSec);
@@ -302,6 +362,18 @@ static int16_t _CalcInnerOutputUs(const BallControl_t *pControl,
     }
     outputUs = _ApplyNearTargetControl((int16_t)outputUs, positionErrorMm,
         (pControl == 0) ? 0 : pControl->ballSpeedMmPerSec);
+
+    if (((int16_t)(ballMm + positionErrorMm) >= BALL_CONTROL_POS_TARGET_MM) &&
+        (_Abs16(positionErrorMm) <= BALL_CONTROL_POS_CATCH_ZONE_MM)) {
+        if (_Abs16(positionErrorMm) <= BALL_CONTROL_POS_CATCH_FINE_ZONE_MM) {
+            outputUs = _LimitSigned(outputUs,
+                BALL_CONTROL_POS_CATCH_FINE_OUTPUT_LIMIT_US);
+        } else {
+            outputUs = _LimitSigned(outputUs,
+                BALL_CONTROL_POS_CATCH_OUTPUT_LIMIT_US);
+        }
+    }
+
     outputUs = _ApplyOutputStepLimit(pControl, (int16_t)outputUs);
 
     return (int16_t)outputUs;
@@ -342,6 +414,195 @@ static int16_t _ApplyNearTargetControl(int16_t outputUs, int16_t errorMm,
     }
 
     return outputUs;
+}
+
+static int16_t _ApplyBrakeZone(BallControl_t *pControl,
+    int16_t targetSpeedMmPerSec, int16_t targetMm, int16_t ballMm,
+    int16_t errorMm, int16_t ballSpeedMmPerSec)
+{
+    int16_t absError = _Abs16(errorMm);
+    int16_t absSpeed = _Abs16(ballSpeedMmPerSec);
+    int16_t brakeZoneMm;
+	
+	/* 第二阶段 +50 专用捕获：进入捕获区后改成低速位置环，避免 60~40 来回振荡 */
+if (targetMm >= BALL_CONTROL_POS_TARGET_MM) {
+    int16_t distanceMm = _Abs16((int16_t)(targetMm - ballMm));
+
+    if (distanceMm <= BALL_CONTROL_POS_CATCH_ZONE_MM) {
+        int16_t catchTargetSpeedMmPerSec;
+        int16_t catchSpeedLimitMmPerSec;
+
+        catchTargetSpeedMmPerSec = (int16_t)(
+            ((int32_t)(targetMm - ballMm) *
+             BALL_CONTROL_POS_CATCH_KP_NUM) /
+            BALL_CONTROL_POS_CATCH_KP_DEN);
+
+        if (distanceMm <= BALL_CONTROL_POS_CATCH_FINE_ZONE_MM) {
+            catchSpeedLimitMmPerSec =
+                BALL_CONTROL_POS_CATCH_FINE_SPEED_LIMIT_MM_PER_S;
+        } else {
+            catchSpeedLimitMmPerSec =
+                BALL_CONTROL_POS_CATCH_SPEED_LIMIT_MM_PER_S;
+        }
+
+        if (catchTargetSpeedMmPerSec > catchSpeedLimitMmPerSec) {
+            catchTargetSpeedMmPerSec = catchSpeedLimitMmPerSec;
+        } else if (catchTargetSpeedMmPerSec < -catchSpeedLimitMmPerSec) {
+            catchTargetSpeedMmPerSec = (int16_t)-catchSpeedLimitMmPerSec;
+        }
+
+        if (pControl != 0) {
+            pControl->brakeReverseActive = 0U;
+        }
+
+        return catchTargetSpeedMmPerSec;
+    }
+}
+	
+    int16_t brakeReverseMmPerSec;
+    int16_t brakeGainPercent;
+    int16_t entrySpeedMmPerSec;
+    int16_t excessSpeedMmPerSec;
+
+    if (_Abs16(targetMm) < BALL_CONTROL_BRAKE_TARGET_ACTIVE_MM) {
+        if (pControl != 0) {
+            pControl->brakeZoneActive = 0U;
+            pControl->brakeReverseActive = 0U;
+        }
+        return targetSpeedMmPerSec;
+    }
+
+    if (targetMm < 0) {
+        brakeZoneMm = BALL_CONTROL_BRAKE_NEG_ZONE_MM;
+        brakeReverseMmPerSec = 0;
+        brakeGainPercent = BALL_CONTROL_BRAKE_NEG_GAIN_MAX_PERCENT;
+    } else if (targetMm > 0) {
+        brakeZoneMm = BALL_CONTROL_BRAKE_POS_ZONE_MM;
+        brakeReverseMmPerSec = 0;
+        brakeGainPercent = BALL_CONTROL_BRAKE_POS_GAIN_MAX_PERCENT;
+    } else {
+        if (pControl != 0) {
+            pControl->brakeZoneActive = 0U;
+            pControl->brakeReverseActive = 0U;
+        }
+        return targetSpeedMmPerSec;
+    }
+
+    /* 远离刹车区：保持原来的大力度，不动 */
+    if ((brakeZoneMm <= 0) || (absError > brakeZoneMm)) {
+        if (pControl != 0) {
+            pControl->brakeZoneActive = 0U;
+            pControl->brakeReverseActive = 0U;
+        }
+        return targetSpeedMmPerSec;
+    }
+
+    /* 速度被限幅到最大值时，多半是视觉跳点；不要用它计算动态刹车。 */
+    if (absSpeed >= BALL_CONTROL_MEASURED_SPEED_LIMIT_MM_PER_S) {
+        if (pControl != 0) {
+            pControl->brakeReverseActive = 0U;
+        }
+        return targetSpeedMmPerSec;
+    }
+
+    /* 球正在远离目标，不能把这次速度记录成刹车入口速度。 */
+    if (((int32_t)errorMm * (int32_t)ballSpeedMmPerSec) <= 0L) {
+        if (pControl != 0) {
+            pControl->brakeReverseActive = 0U;
+        }
+        return targetSpeedMmPerSec;
+    }
+
+    if ((pControl != 0) && (pControl->brakeZoneActive == 0U)) {
+        pControl->brakeZoneActive = 1U;
+        pControl->brakeReverseActive = 0U;
+        entrySpeedMmPerSec = absSpeed;
+
+        if (targetMm < 0) {
+            excessSpeedMmPerSec = (int16_t)(
+                entrySpeedMmPerSec - BALL_CONTROL_BRAKE_NEG_ENTRY_MIN_MM_PER_S);
+            if (excessSpeedMmPerSec < 0) {
+                excessSpeedMmPerSec = 0;
+            }
+
+            brakeReverseMmPerSec = (int16_t)(
+                excessSpeedMmPerSec / BALL_CONTROL_BRAKE_NEG_REVERSE_DIV);
+            if (brakeReverseMmPerSec >
+                BALL_CONTROL_BRAKE_NEG_REVERSE_MAX_MM_PER_S) {
+                brakeReverseMmPerSec =
+                    BALL_CONTROL_BRAKE_NEG_REVERSE_MAX_MM_PER_S;
+            }
+
+            brakeGainPercent = (int16_t)(
+                BALL_CONTROL_BRAKE_NEG_GAIN_MAX_PERCENT -
+                (excessSpeedMmPerSec / BALL_CONTROL_BRAKE_NEG_GAIN_DIV));
+            if (brakeGainPercent < BALL_CONTROL_BRAKE_NEG_GAIN_MIN_PERCENT) {
+                brakeGainPercent = BALL_CONTROL_BRAKE_NEG_GAIN_MIN_PERCENT;
+            }
+        } else if (targetMm > 0) {
+            excessSpeedMmPerSec = (int16_t)(
+                entrySpeedMmPerSec - BALL_CONTROL_BRAKE_POS_ENTRY_MIN_MM_PER_S);
+            if (excessSpeedMmPerSec < 0) {
+                excessSpeedMmPerSec = 0;
+            }
+
+            brakeReverseMmPerSec = (int16_t)(
+                excessSpeedMmPerSec / BALL_CONTROL_BRAKE_POS_REVERSE_DIV);
+            if (brakeReverseMmPerSec >
+                BALL_CONTROL_BRAKE_POS_REVERSE_MAX_MM_PER_S) {
+                brakeReverseMmPerSec =
+                    BALL_CONTROL_BRAKE_POS_REVERSE_MAX_MM_PER_S;
+            }
+
+            brakeGainPercent = (int16_t)(
+                BALL_CONTROL_BRAKE_POS_GAIN_MAX_PERCENT -
+                (excessSpeedMmPerSec / BALL_CONTROL_BRAKE_POS_GAIN_DIV));
+            if (brakeGainPercent < BALL_CONTROL_BRAKE_POS_GAIN_MIN_PERCENT) {
+                brakeGainPercent = BALL_CONTROL_BRAKE_POS_GAIN_MIN_PERCENT;
+            }
+        }
+
+        pControl->brakeEntrySpeedMmPerSec = entrySpeedMmPerSec;
+        pControl->brakeDynamicReverseMmPerSec = brakeReverseMmPerSec;
+        pControl->brakeDynamicGainPercent = brakeGainPercent;
+
+        if (BALL_CONTROL_BRAKE_PROBE_LOG_ENABLE != 0U) {
+            BspUart_Printf("[H3B] zone target=%d ball=%d err=%d speed=%d cmd=%d entry=%d rev=%d gain=%d\n",
+                (int)targetMm,
+                (int)ballMm,
+                (int)errorMm,
+                (int)ballSpeedMmPerSec,
+                (int)targetSpeedMmPerSec,
+                (int)pControl->brakeEntrySpeedMmPerSec,
+                (int)pControl->brakeDynamicReverseMmPerSec,
+                (int)pControl->brakeDynamicGainPercent);
+        }
+    }
+
+    if (pControl != 0) {
+        brakeReverseMmPerSec = pControl->brakeDynamicReverseMmPerSec;
+        brakeGainPercent = pControl->brakeDynamicGainPercent;
+    }
+
+    /* 正在冲向目标：按进入刹车区时的速度动态给反向目标速度。 */
+    if ((brakeReverseMmPerSec > 0) &&
+        (absError > BALL_CONTROL_DEAD_ZONE_MM)) {
+        if (pControl != 0) {
+            pControl->brakeReverseActive = 1U;
+        }
+        if (errorMm > 0) {
+            return (int16_t)-brakeReverseMmPerSec;
+        }
+        if (errorMm < 0) {
+            return brakeReverseMmPerSec;
+        }
+    }
+
+    /* 接近目标但速度可控：只收力，不反推 */
+    if (pControl != 0) {
+        pControl->brakeReverseActive = 0U;
+    }
+    return _ScalePercent(targetSpeedMmPerSec, brakeGainPercent);
 }
 
 static int16_t _ApplyOutputStepLimit(const BallControl_t *pControl,

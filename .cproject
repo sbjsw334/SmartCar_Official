@@ -105,6 +105,6 @@
         </cconfiguration>
     </storageModule>
     <storageModule moduleId="cdtBuildSystem" version="4.0.0">
-        <project id="SmartCar_Official.com.ti.ccstudio.buildDefinitions.TMS470.ProjectType.1997921054" name="TMS470" projectType="com.ti.ccstudio.buildDefinitions.TMS470.ProjectType"/>
+        <project id="SmartCar_Official_Plus.com.ti.ccstudio.buildDefinitions.TMS470.ProjectType.1997921054" name="TMS470" projectType="com.ti.ccstudio.buildDefinitions.TMS470.ProjectType"/>
     </storageModule>
 </cproject>

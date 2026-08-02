@@ -70,7 +70,7 @@
 尚未达到题目要求：
 
 - 视觉端已将图像坐标转换为毫米，左负右正
-- H3 已接入钢球位置 PD；H4~H6 仍需实车联调和题目流程补齐
+- H2/H3 finalized; H4/H5 remain tunable in Plus.
 - 没有轮速 PI 和 H4 的 AB 距离判定
 - A 线已有里程放行、至少 6 路命中、连续 30 ms 确认和 1 s 补偿循迹；仍需实测停车偏差并调整补偿时间
 - OLED 软件和 PB2/PB3 I2C 已接通，仍需装车确认显示稳定性
@@ -88,7 +88,7 @@
 4. 填充 `_BallMovePositive`、`_BallMoveNegative`、`_BallHoldTarget`。
 5. 状态切换必须使用“误差不超过 10 mm + 连续稳定时间”，不能用单帧命中。
 6. 视觉失效时不得保持旧控制量；超时应停止控制并上报故障。
-7. H6 的指定位置通过 `appCarCon.setBallTargetMm()` 写入，不直接修改实体成员。
+7. H4/H5 targets, bias, and tuning knobs should go through appCarCon or top-level macros, not direct state writes.
 
 交付测试：静止小车完成 `0 -> +50 -> -50 mm`，总时间不超过 5 s，最大位置误差不超过 10 mm。
 
@@ -98,7 +98,7 @@
 2. 实测 H2 一圈的 OLED `ENC`；当前预计值约 `43837`，80% 放行门槛约 `35069`。
 3. 实测 `_RouteFinishAction` 的停车位置，调整顶部 `APP_CAR_FINISH_FOLLOW_MS`。
 4. 新建左右轮速度 PI，使循迹输出成为目标轮速，不再直接等同 PWM 百分比。
-5. H4 使用累计里程判断 AB；H2、H5、H6 使用里程门槛加 A 启停线判断一圈。
+5. H4 uses accumulated distance for AB; H2/H5 use distance gate plus A-line finish detection.
 
 交付测试：纯循迹一圈不脱线，20 s 内停车，基准位置偏差不超过 20 mm。
 
