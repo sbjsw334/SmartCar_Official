@@ -71,7 +71,7 @@ struct _AppCarDef {
     uint32_t h4AccSampleSeq;
     int16_t h4AccBiasMg;
     int16_t h4AccFiltMg;
-    int16_t h4AccFfUs;
+    int16_t h4AccFfMm;
     uint16_t h4AccRejectCount;
     uint16_t ballStableMs;
     uint32_t ballStableFrameSeq;

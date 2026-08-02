@@ -72,19 +72,16 @@
 #define APP_CAR_H4_FINISH_CRUISE_MS       (2000U)
 #define APP_CAR_H4_FINISH_DECEL_MS        (2200U)
 
-/* H4 JY61P Y轴加速度直接补偿舵机，避免等待下一帧视觉数据。 */
+/* H4 JY61P Y轴加速度前馈：视觉仍为主闭环，只提前补偿起步/转弯/减速惯性。 */
 #define APP_CAR_H4_ACC_FF_ENABLE           (1U)
 #define APP_CAR_H4_ACC_FF_DIRECTION        (1)
 #define APP_CAR_H4_ACC_FF_FILTER_DEN       (4)
 #define APP_CAR_H4_ACC_FF_DEAD_MG          (12)
-#define APP_CAR_H4_ACC_FF_GAIN_US_NUM      (1)
-#define APP_CAR_H4_ACC_FF_GAIN_US_DEN      (1)
-#define APP_CAR_H4_ACC_FF_LIMIT_US         (35)
+#define APP_CAR_H4_ACC_FF_GAIN_NUM         (1)
+#define APP_CAR_H4_ACC_FF_GAIN_DEN         (5)
+#define APP_CAR_H4_ACC_FF_LIMIT_MM         (6)
 #define APP_CAR_H4_ACC_FF_REJECT_MG        (250)
-
-/* H4视觉边界保护：接近±10mm时增大回中误差，但不改变最终中心。 */
-#define APP_CAR_H4_GUARD_START_MM           (4)
-#define APP_CAR_H4_GUARD_LIMIT_MM           (8)
+#define APP_CAR_H4_ACC_FF_STEP_MM          (1)
 
 /* H5 parameters: one clockwise lap with ball held at O.
  * 第五题只优先调下面这些值：
@@ -187,7 +184,6 @@ static void _RunH4FinishDecel(AppCarDef *pCar, uint32_t decelElapsedMs);
 static void _RunBallControl(AppCarDef *pCar, int16_t targetMm);
 static int16_t _GetCurrentTraceSpeed(const AppCarDef *pCar);
 static int16_t _GetBallHoldTargetMm(const AppCarDef *pCar);
-static int16_t _GetH4BoundaryGuardMm(const AppCarDef *pCar);
 static int16_t _ClampBallTargetMm(int16_t targetMm);
 static uint16_t _GetFinishFollowMs(AppCarMode_t mode);
 static int16_t _StepBallTargetMm(AppCarDef *pCar, int16_t finalTargetMm);
@@ -245,7 +241,7 @@ static void _Init(AppCarDef *pCar)
     pCar->h4AccSampleSeq = 0U;
     pCar->h4AccBiasMg = 0;
     pCar->h4AccFiltMg = 0;
-    pCar->h4AccFfUs = 0;
+    pCar->h4AccFfMm = 0;
     pCar->h4AccRejectCount = 0U;
     pCar->imuValid = 0U;
     pCar->imuOnline = 0U;
@@ -673,9 +669,6 @@ static void _BallWaitVision(AppCarDef *pCar)
                 holdTargetMm = APP_CAR_BALL_CENTER_MM;
             }
             pCar->ballTargetMm = holdTargetMm;
-            if (pCar->mode == APP_CAR_MODE_BALANCE_AB) {
-                holdTargetMm = _GetBallHoldTargetMm(pCar);
-            }
             _RunBallControl(pCar, holdTargetMm);
 
             if (pCar->mode == APP_CAR_MODE_BALANCE_AB) {
@@ -794,7 +787,7 @@ static void _EnterStopped(AppCarDef *pCar)
     pCar->h5LastSpeedFiltPps = 0;
     pCar->h5AccelFfMm = 0;
     pCar->h4AccFiltMg = 0;
-    pCar->h4AccFfUs = 0;
+    pCar->h4AccFfMm = 0;
     pCar->h4AccRejectCount = 0U;
     pCar->h4AccBiasValid = 0U;
     pCar->h2FinishForwardYawValid = 0U;
@@ -993,7 +986,7 @@ static void _ResetH4AccelFeedforward(AppCarDef *pCar)
     pCar->h4AccSampleSeq = 0U;
     pCar->h4AccBiasMg = 0;
     pCar->h4AccFiltMg = 0;
-    pCar->h4AccFfUs = 0;
+    pCar->h4AccFfMm = 0;
     pCar->h4AccRejectCount = 0U;
     pCar->h4AccBiasValid = 0U;
 
@@ -1010,24 +1003,15 @@ static void _UpdateH4AccelFeedforward(AppCarDef *pCar,
 {
     int32_t dynamicAccMg;
     int32_t filteredAccMg;
-    int32_t ffUs;
+    int32_t ffMm;
+    int32_t currentFfMm;
 
     if ((pCar == 0) || (pImu == 0) ||
         (pCar->mode != APP_CAR_MODE_BALANCE_AB) ||
         (APP_CAR_H4_ACC_FF_ENABLE == 0U) || (pImu->valid == 0U)) {
         if (pCar != 0) {
-            pCar->h4AccFiltMg = 0;
-            pCar->h4AccFfUs = 0;
+            pCar->h4AccFfMm = 0;
         }
-        return;
-    }
-
-    if ((pCar->fatherState != APP_CAR_FATHER_RUNNING) ||
-        ((pCar->routeState != APP_CAR_ROUTE_LEAVE_START) &&
-         (pCar->routeState != APP_CAR_ROUTE_TRACKING) &&
-         (pCar->routeState != APP_CAR_ROUTE_FINISH_ACTION))) {
-        pCar->h4AccFiltMg = 0;
-        pCar->h4AccFfUs = 0;
         return;
     }
 
@@ -1039,7 +1023,7 @@ static void _UpdateH4AccelFeedforward(AppCarDef *pCar,
     if (pCar->h4AccBiasValid == 0U) {
         pCar->h4AccBiasMg = pImu->accYmg;
         pCar->h4AccFiltMg = 0;
-        pCar->h4AccFfUs = 0;
+        pCar->h4AccFfMm = 0;
         pCar->h4AccBiasValid = 1U;
         return;
     }
@@ -1059,18 +1043,25 @@ static void _UpdateH4AccelFeedforward(AppCarDef *pCar,
     pCar->h4AccFiltMg = (int16_t)filteredAccMg;
 
     if (_AbsI32(filteredAccMg) <= APP_CAR_H4_ACC_FF_DEAD_MG) {
-        ffUs = 0;
+        ffMm = 0;
     } else {
-        ffUs = (filteredAccMg * (int32_t)APP_CAR_H4_ACC_FF_GAIN_US_NUM) /
-            (int32_t)APP_CAR_H4_ACC_FF_GAIN_US_DEN;
-        ffUs *= (int32_t)APP_CAR_H4_ACC_FF_DIRECTION;
-        if (ffUs > APP_CAR_H4_ACC_FF_LIMIT_US) {
-            ffUs = APP_CAR_H4_ACC_FF_LIMIT_US;
-        } else if (ffUs < -APP_CAR_H4_ACC_FF_LIMIT_US) {
-            ffUs = -APP_CAR_H4_ACC_FF_LIMIT_US;
+        ffMm = (filteredAccMg * (int32_t)APP_CAR_H4_ACC_FF_GAIN_NUM) /
+            (int32_t)APP_CAR_H4_ACC_FF_GAIN_DEN;
+        ffMm *= (int32_t)APP_CAR_H4_ACC_FF_DIRECTION;
+        if (ffMm > APP_CAR_H4_ACC_FF_LIMIT_MM) {
+            ffMm = APP_CAR_H4_ACC_FF_LIMIT_MM;
+        } else if (ffMm < -APP_CAR_H4_ACC_FF_LIMIT_MM) {
+            ffMm = -APP_CAR_H4_ACC_FF_LIMIT_MM;
         }
     }
-    pCar->h4AccFfUs = (int16_t)ffUs;
+
+    currentFfMm = pCar->h4AccFfMm;
+    if (ffMm > (currentFfMm + APP_CAR_H4_ACC_FF_STEP_MM)) {
+        ffMm = currentFfMm + APP_CAR_H4_ACC_FF_STEP_MM;
+    } else if (ffMm < (currentFfMm - APP_CAR_H4_ACC_FF_STEP_MM)) {
+        ffMm = currentFfMm - APP_CAR_H4_ACC_FF_STEP_MM;
+    }
+    pCar->h4AccFfMm = (int16_t)ffMm;
 }
 
 static void _UpdateH5AccelFeedforward(AppCarDef *pCar)
@@ -1163,25 +1154,11 @@ static void _RunH4FinishDecel(AppCarDef *pCar, uint32_t decelElapsedMs)
 
 static void _RunBallControl(AppCarDef *pCar, int16_t targetMm)
 {
-    int32_t pulseUs = BallControl_Update(&pCar->ballControl,
+    uint16_t pulseUs = BallControl_Update(&pCar->ballControl,
         targetMm, pCar->ballOffsetMm, pCar->ballFrameSeq,
         pCar->uptimeMs, pCar->ballValid);
 
-    if ((pCar->mode == APP_CAR_MODE_BALANCE_AB) &&
-        (pCar->fatherState == APP_CAR_FATHER_RUNNING) &&
-        (pCar->ballValid != 0U) &&
-        ((pCar->routeState == APP_CAR_ROUTE_LEAVE_START) ||
-         (pCar->routeState == APP_CAR_ROUTE_TRACKING) ||
-         (pCar->routeState == APP_CAR_ROUTE_FINISH_ACTION))) {
-        pulseUs += pCar->h4AccFfUs;
-    }
-
-    if (pulseUs < BSP_SERVO_PULSE_MIN_US) {
-        pulseUs = BSP_SERVO_PULSE_MIN_US;
-    } else if (pulseUs > BSP_SERVO_PULSE_MAX_US) {
-        pulseUs = BSP_SERVO_PULSE_MAX_US;
-    }
-    BspServo_SetPulseUs((uint16_t)pulseUs);
+    BspServo_SetPulseUs(pulseUs);
 }
 
 static int16_t _GetCurrentTraceSpeed(const AppCarDef *pCar)
@@ -1238,7 +1215,7 @@ static int16_t _GetBallHoldTargetMm(const AppCarDef *pCar)
     }
 
     if (pCar->mode == APP_CAR_MODE_BALANCE_AB) {
-        targetMm += _GetH4BoundaryGuardMm(pCar);
+        targetMm += pCar->h4AccFfMm;
         feedforwardMm = APP_CAR_H4_START_FF_MM;
         holdMs = APP_CAR_H4_START_FF_HOLD_MS;
         fadeMs = APP_CAR_H4_START_FF_FADE_MS;
@@ -1268,31 +1245,6 @@ static int16_t _GetBallHoldTargetMm(const AppCarDef *pCar)
     targetMm += accelFfMm;
 
     return _ClampBallTargetMm((int16_t)targetMm);
-}
-
-static int16_t _GetH4BoundaryGuardMm(const AppCarDef *pCar)
-{
-    int32_t absBallMm;
-    int32_t guardMm;
-
-    if ((pCar == 0) || (pCar->ballValid == 0U)) {
-        return 0;
-    }
-
-    absBallMm = _AbsI32((int32_t)pCar->ballOffsetMm);
-    if (absBallMm <= APP_CAR_H4_GUARD_START_MM) {
-        return 0;
-    }
-
-    guardMm = absBallMm - APP_CAR_H4_GUARD_START_MM;
-    if (guardMm > APP_CAR_H4_GUARD_LIMIT_MM) {
-        guardMm = APP_CAR_H4_GUARD_LIMIT_MM;
-    }
-
-    if (pCar->ballOffsetMm > 0) {
-        guardMm = -guardMm;
-    }
-    return (int16_t)guardMm;
 }
 
 static int16_t _ClampBallTargetMm(int16_t targetMm)
@@ -1641,7 +1593,7 @@ static void _PrintH4Telemetry(const AppCarDef *pCar)
     (void)BspJy61p_GetData(&imu);
     targetMm = _GetBallHoldTargetMm(pCar);
     BspUart_Printf(
-        "[H4D] t=%lu s=%lu r=%u p=%lu b=%d/%u ay=%d iv=%u bias=%d ayf=%d ffu=%d tg=%d rej=%u c=%d,%d d=%d\n",
+        "[H4D] t=%lu s=%lu r=%u p=%lu b=%d/%u ay=%d iv=%u bias=%d ayf=%d ff=%d tg=%d rej=%u c=%d,%d d=%d\n",
         (unsigned long)pCar->ballStateMs,
         (unsigned long)pCar->elapsedMs,
         (unsigned)pCar->routeState,
@@ -1652,7 +1604,7 @@ static void _PrintH4Telemetry(const AppCarDef *pCar)
         (unsigned)imu.valid,
         (int)pCar->h4AccBiasMg,
         (int)pCar->h4AccFiltMg,
-        (int)pCar->h4AccFfUs,
+        (int)pCar->h4AccFfMm,
         (int)targetMm,
         (unsigned)pCar->h4AccRejectCount,
         (int)pCar->leftCommand,
