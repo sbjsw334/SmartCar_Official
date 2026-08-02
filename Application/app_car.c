@@ -62,8 +62,8 @@
 #define APP_CAR_H4_AB_EXPECTED_PULSES     \
     ((APP_CAR_H4_AB_LENGTH_MM * APP_CAR_ENCODER_COUNTS_PER_REV) / \
      APP_CAR_WHEEL_CIRCUMFERENCE_MM)
-#define APP_CAR_H4_RAMP_START_SPEED       (16)
-#define APP_CAR_H4_RAMP_MS                (1000U)
+#define APP_CAR_H4_RAMP_START_SPEED       (10)
+#define APP_CAR_H4_RAMP_MS                (1800U)
 #define APP_CAR_H4_START_READY_ERROR_MM   (10)
 #define APP_CAR_H4_START_READY_MS         (200U)
 #define APP_CAR_H4_START_FF_MM            (0)
@@ -1042,6 +1042,7 @@ static int16_t _GetCurrentTraceSpeed(const AppCarDef *pCar)
     int16_t targetSpeed;
     int16_t startSpeed;
     uint32_t rampMs;
+    uint32_t rampElapsedMs;
     int32_t speed;
 
     targetSpeed = _GetTraceSpeed(pCar->mode);
@@ -1052,9 +1053,12 @@ static int16_t _GetCurrentTraceSpeed(const AppCarDef *pCar)
     if (pCar->mode == APP_CAR_MODE_BALANCE_AB) {
         startSpeed = APP_CAR_H4_RAMP_START_SPEED;
         rampMs = APP_CAR_H4_RAMP_MS;
+        /* H4用球控HOLD状态的连续时间，经过A线切换路线状态时不重置缓启动。 */
+        rampElapsedMs = pCar->ballStateMs;
     } else if (pCar->mode == APP_CAR_MODE_BALANCE_LAP_CENTER) {
         startSpeed = APP_CAR_H5_RAMP_START_SPEED;
         rampMs = APP_CAR_H5_RAMP_MS;
+        rampElapsedMs = pCar->routeStateMs;
     } else {
         return targetSpeed;
     }
@@ -1063,12 +1067,12 @@ static int16_t _GetCurrentTraceSpeed(const AppCarDef *pCar)
         startSpeed = targetSpeed;
     }
 
-    if ((rampMs == 0U) || (pCar->routeStateMs >= rampMs)) {
+    if ((rampMs == 0U) || (rampElapsedMs >= rampMs)) {
         return targetSpeed;
     }
 
     speed = (int32_t)startSpeed +
-        (((int32_t)(targetSpeed - startSpeed) * (int32_t)pCar->routeStateMs) /
+        (((int32_t)(targetSpeed - startSpeed) * (int32_t)rampElapsedMs) /
          (int32_t)rampMs);
     return (int16_t)speed;
 }
