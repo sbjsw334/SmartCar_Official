@@ -72,6 +72,17 @@
 #define APP_CAR_H4_FINISH_CRUISE_MS       (2000U)
 #define APP_CAR_H4_FINISH_DECEL_MS        (1500U)
 
+/* H4 JY61P Y轴加速度前馈：视觉仍为主闭环，只提前补偿起步/转弯/减速惯性。 */
+#define APP_CAR_H4_ACC_FF_ENABLE           (1U)
+#define APP_CAR_H4_ACC_FF_DIRECTION        (1)
+#define APP_CAR_H4_ACC_FF_FILTER_DEN       (4)
+#define APP_CAR_H4_ACC_FF_DEAD_MG          (12)
+#define APP_CAR_H4_ACC_FF_GAIN_NUM         (1)
+#define APP_CAR_H4_ACC_FF_GAIN_DEN         (5)
+#define APP_CAR_H4_ACC_FF_LIMIT_MM         (6)
+#define APP_CAR_H4_ACC_FF_REJECT_MG        (250)
+#define APP_CAR_H4_ACC_FF_STEP_MM          (1)
+
 /* H5 parameters: one clockwise lap with ball held at O.
  * 第五题只优先调下面这些值：
  * 1) APP_CAR_TRACE_SPEED_H5：整圈循迹速度，先用28；若球晃先降到24~26，稳定后再提速。
@@ -164,6 +175,9 @@ static void _SetBallState(AppCarDef *pCar, AppCarBallState_t state);
 static void _ConfigureChildren(AppCarDef *pCar);
 static void _RunChildren(AppCarDef *pCar);
 static void _SampleInputs(AppCarDef *pCar);
+static void _ResetH4AccelFeedforward(AppCarDef *pCar);
+static void _UpdateH4AccelFeedforward(AppCarDef *pCar,
+    const BspJy61pData_t *pImu);
 static void _UpdateH5AccelFeedforward(AppCarDef *pCar);
 static void _RunTraceControl(AppCarDef *pCar);
 static void _RunH4FinishDecel(AppCarDef *pCar, uint32_t decelElapsedMs);
@@ -224,9 +238,15 @@ static void _Init(AppCarDef *pCar)
     pCar->imuYawCd = 0;
     pCar->imuLastYawCd = 0;
     pCar->imuSampleSeq = 0U;
+    pCar->h4AccSampleSeq = 0U;
+    pCar->h4AccBiasMg = 0;
+    pCar->h4AccFiltMg = 0;
+    pCar->h4AccFfMm = 0;
+    pCar->h4AccRejectCount = 0U;
     pCar->imuValid = 0U;
     pCar->imuOnline = 0U;
     pCar->imuHasLastYaw = 0U;
+    pCar->h4AccBiasValid = 0U;
     pCar->h2FinishForwardYawValid = 0U;
     pCar->ballStableMs = 0U;
     pCar->ballStableFrameSeq = 0U;
@@ -766,6 +786,10 @@ static void _EnterStopped(AppCarDef *pCar)
     pCar->h5SpeedFiltPps = 0;
     pCar->h5LastSpeedFiltPps = 0;
     pCar->h5AccelFfMm = 0;
+    pCar->h4AccFiltMg = 0;
+    pCar->h4AccFfMm = 0;
+    pCar->h4AccRejectCount = 0U;
+    pCar->h4AccBiasValid = 0U;
     pCar->h2FinishForwardYawValid = 0U;
     pCar->ballStableMs = 0U;
     pCar->timerRunning = 0U;
@@ -795,6 +819,7 @@ static void _EnterRunning(AppCarDef *pCar)
     pCar->rightCommand = 0;
     pCar->ballStableMs = 0U;
     pCar->h2FinishForwardYawValid = 0U;
+    _ResetH4AccelFeedforward(pCar);
     _ResetImuLap(pCar);
     pCar->fatherState = APP_CAR_FATHER_RUNNING;
     pCar->pFatherState = _FatherRunning;
@@ -946,7 +971,97 @@ static void _SampleInputs(AppCarDef *pCar)
     pCar->imuValid = imu.valid;
     pCar->imuOnline = imu.online;
     _UpdateImuLap(pCar, &imu);
+    _UpdateH4AccelFeedforward(pCar, &imu);
     _UpdateH5AccelFeedforward(pCar);
+}
+
+static void _ResetH4AccelFeedforward(AppCarDef *pCar)
+{
+    BspJy61pData_t imu;
+
+    if (pCar == 0) {
+        return;
+    }
+
+    pCar->h4AccSampleSeq = 0U;
+    pCar->h4AccBiasMg = 0;
+    pCar->h4AccFiltMg = 0;
+    pCar->h4AccFfMm = 0;
+    pCar->h4AccRejectCount = 0U;
+    pCar->h4AccBiasValid = 0U;
+
+    if ((pCar->mode == APP_CAR_MODE_BALANCE_AB) &&
+        (BspJy61p_GetData(&imu) != 0U)) {
+        pCar->h4AccSampleSeq = imu.sampleSeq;
+        pCar->h4AccBiasMg = imu.accYmg;
+        pCar->h4AccBiasValid = 1U;
+    }
+}
+
+static void _UpdateH4AccelFeedforward(AppCarDef *pCar,
+    const BspJy61pData_t *pImu)
+{
+    int32_t dynamicAccMg;
+    int32_t filteredAccMg;
+    int32_t ffMm;
+    int32_t currentFfMm;
+
+    if ((pCar == 0) || (pImu == 0) ||
+        (pCar->mode != APP_CAR_MODE_BALANCE_AB) ||
+        (APP_CAR_H4_ACC_FF_ENABLE == 0U) || (pImu->valid == 0U)) {
+        if (pCar != 0) {
+            pCar->h4AccFfMm = 0;
+        }
+        return;
+    }
+
+    if (pImu->sampleSeq == pCar->h4AccSampleSeq) {
+        return;
+    }
+    pCar->h4AccSampleSeq = pImu->sampleSeq;
+
+    if (pCar->h4AccBiasValid == 0U) {
+        pCar->h4AccBiasMg = pImu->accYmg;
+        pCar->h4AccFiltMg = 0;
+        pCar->h4AccFfMm = 0;
+        pCar->h4AccBiasValid = 1U;
+        return;
+    }
+
+    dynamicAccMg = (int32_t)pImu->accYmg - (int32_t)pCar->h4AccBiasMg;
+    if (_AbsI32(dynamicAccMg) > APP_CAR_H4_ACC_FF_REJECT_MG) {
+        if (pCar->h4AccRejectCount < 0xFFFFU) {
+            pCar->h4AccRejectCount++;
+        }
+        return;
+    }
+
+    filteredAccMg =
+        (((int32_t)pCar->h4AccFiltMg *
+          (int32_t)(APP_CAR_H4_ACC_FF_FILTER_DEN - 1U)) + dynamicAccMg) /
+        (int32_t)APP_CAR_H4_ACC_FF_FILTER_DEN;
+    pCar->h4AccFiltMg = (int16_t)filteredAccMg;
+
+    if (_AbsI32(filteredAccMg) <= APP_CAR_H4_ACC_FF_DEAD_MG) {
+        ffMm = 0;
+    } else {
+        ffMm = (filteredAccMg * (int32_t)APP_CAR_H4_ACC_FF_GAIN_NUM) /
+            (int32_t)APP_CAR_H4_ACC_FF_GAIN_DEN;
+        ffMm *= (int32_t)APP_CAR_H4_ACC_FF_DIRECTION;
+        if (ffMm > APP_CAR_H4_ACC_FF_LIMIT_MM) {
+            ffMm = APP_CAR_H4_ACC_FF_LIMIT_MM;
+        } else if (ffMm < -APP_CAR_H4_ACC_FF_LIMIT_MM) {
+            ffMm = -APP_CAR_H4_ACC_FF_LIMIT_MM;
+        }
+    }
+
+    currentFfMm = pCar->h4AccFfMm;
+    if (ffMm > (currentFfMm + APP_CAR_H4_ACC_FF_STEP_MM)) {
+        ffMm = currentFfMm + APP_CAR_H4_ACC_FF_STEP_MM;
+    } else if (ffMm < (currentFfMm - APP_CAR_H4_ACC_FF_STEP_MM)) {
+        ffMm = currentFfMm - APP_CAR_H4_ACC_FF_STEP_MM;
+    }
+    pCar->h4AccFfMm = (int16_t)ffMm;
 }
 
 static void _UpdateH5AccelFeedforward(AppCarDef *pCar)
@@ -1100,6 +1215,7 @@ static int16_t _GetBallHoldTargetMm(const AppCarDef *pCar)
     }
 
     if (pCar->mode == APP_CAR_MODE_BALANCE_AB) {
+        targetMm += pCar->h4AccFfMm;
         feedforwardMm = APP_CAR_H4_START_FF_MM;
         holdMs = APP_CAR_H4_START_FF_HOLD_MS;
         fadeMs = APP_CAR_H4_START_FF_FADE_MS;
@@ -1472,20 +1588,25 @@ static void _PrintTelemetry(const AppCarDef *pCar)
 static void _PrintH4Telemetry(const AppCarDef *pCar)
 {
     BspJy61pData_t imu;
+    int16_t targetMm;
 
     (void)BspJy61p_GetData(&imu);
+    targetMm = _GetBallHoldTargetMm(pCar);
     BspUart_Printf(
-        "[H4D] run=%lu score=%lu route=%u pulse=%lu ball=%d/%u acc=%d,%d,%d imu=%u cmd=%d,%d turn=%d\n",
+        "[H4D] t=%lu s=%lu r=%u p=%lu b=%d/%u ay=%d iv=%u bias=%d ayf=%d ff=%d tg=%d rej=%u c=%d,%d d=%d\n",
         (unsigned long)pCar->ballStateMs,
         (unsigned long)pCar->elapsedMs,
         (unsigned)pCar->routeState,
         (unsigned long)pCar->routePulses,
         (int)pCar->ballOffsetMm,
         (unsigned)pCar->ballValid,
-        (int)imu.accXmg,
         (int)imu.accYmg,
-        (int)imu.accZmg,
         (unsigned)imu.valid,
+        (int)pCar->h4AccBiasMg,
+        (int)pCar->h4AccFiltMg,
+        (int)pCar->h4AccFfMm,
+        (int)targetMm,
+        (unsigned)pCar->h4AccRejectCount,
         (int)pCar->leftCommand,
         (int)pCar->rightCommand,
         (int)pCar->traceTurn);

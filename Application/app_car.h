@@ -68,6 +68,11 @@ struct _AppCarDef {
     int16_t imuYawCd;
     int16_t imuLastYawCd;
     uint32_t imuSampleSeq;
+    uint32_t h4AccSampleSeq;
+    int16_t h4AccBiasMg;
+    int16_t h4AccFiltMg;
+    int16_t h4AccFfMm;
+    uint16_t h4AccRejectCount;
     uint16_t ballStableMs;
     uint32_t ballStableFrameSeq;
     int16_t ballTargetMm;
@@ -89,6 +94,7 @@ struct _AppCarDef {
     uint8_t imuValid;
     uint8_t imuOnline;
     uint8_t imuHasLastYaw;
+    uint8_t h4AccBiasValid;
     uint8_t h2FinishForwardYawValid;
     uint8_t gray;
     volatile uint8_t timerRunning;
