@@ -594,6 +594,7 @@ static void _BallWaitVision(AppCarDef *pCar)
     int32_t ballErrorMm;
     int32_t startReadyErrorMm;
     uint16_t startReadyMs;
+    uint16_t stableStepMs;
     int16_t holdTargetMm;
 
     if ((pCar->mode != APP_CAR_MODE_BALANCE_AB) &&
@@ -603,6 +604,9 @@ static void _BallWaitVision(AppCarDef *pCar)
 
     if (pCar->ballValid == 0U) {
         pCar->ballStableMs = 0U;
+        if (pCar->mode == APP_CAR_MODE_BALANCE_AB) {
+            pCar->ballStableFrameSeq = pCar->ballFrameSeq;
+        }
         return;
     }
 
@@ -624,14 +628,28 @@ static void _BallWaitVision(AppCarDef *pCar)
             }
             pCar->ballTargetMm = holdTargetMm;
             _RunBallControl(pCar, holdTargetMm);
+
+            if (pCar->mode == APP_CAR_MODE_BALANCE_AB) {
+                /* H4只按K230新帧累计稳定时间，避免同一帧被2ms控制周期重复计算。 */
+                if (pCar->ballFrameSeq == pCar->ballStableFrameSeq) {
+                    return;
+                }
+                pCar->ballStableFrameSeq = pCar->ballFrameSeq;
+                stableStepMs = APP_CAR_BALL_FRAME_MS;
+            } else {
+                stableStepMs = APP_CAR_CONTROL_PERIOD_MS;
+            }
+
             ballErrorMm = _AbsI32((int32_t)pCar->ballOffsetMm);
             if (ballErrorMm > startReadyErrorMm) {
                 pCar->ballStableMs = 0U;
                 return;
             }
             if (pCar->ballStableMs < startReadyMs) {
-                pCar->ballStableMs += APP_CAR_CONTROL_PERIOD_MS;
-                return;
+                pCar->ballStableMs += stableStepMs;
+                if (pCar->ballStableMs < startReadyMs) {
+                    return;
+                }
             }
         }
         _SetRouteState(pCar, APP_CAR_ROUTE_LEAVE_START);
