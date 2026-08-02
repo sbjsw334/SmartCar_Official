@@ -1200,6 +1200,14 @@ static int16_t _GetCurrentTraceSpeed(const AppCarDef *pCar)
         /* H4用球控HOLD状态的连续时间，经过A线切换路线状态时不重置缓启动。 */
         rampElapsedMs = pCar->ballStateMs;
     } else if (pCar->mode == APP_CAR_MODE_BALANCE_LAP_CENTER) {
+        /* H5 only ramps at launch. routeStateMs is reset after detecting A;
+         * applying the launch ramp in FINISH_ACTION would slow down for 400 ms
+         * and then jump back to full speed at the start of finish deceleration.
+         */
+        if ((pCar->routeState != APP_CAR_ROUTE_LEAVE_START) &&
+            (pCar->routeState != APP_CAR_ROUTE_TRACKING)) {
+            return targetSpeed;
+        }
         startSpeed = APP_CAR_H5_RAMP_START_SPEED;
         rampMs = APP_CAR_H5_RAMP_MS;
         rampElapsedMs = pCar->routeStateMs;
