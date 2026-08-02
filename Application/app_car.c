@@ -189,6 +189,7 @@ static void _ResetImuLap(AppCarDef *pCar);
 static void _UpdateImuLap(AppCarDef *pCar, const BspJy61pData_t *pImu);
 static uint8_t _CanFinishByRouteGate(const AppCarDef *pCar);
 static void _PrintTelemetry(const AppCarDef *pCar);
+static void _PrintH4Telemetry(const AppCarDef *pCar);
 static int16_t _GetTraceSpeed(AppCarMode_t mode);
 
 AppCarDef appCarMain;
@@ -366,7 +367,9 @@ static void _FatherStopped(AppCarDef *pCar, MsgId_t msg)
     } else if (msg == MSG_CONTROL_TICK) {
         _SampleInputs(pCar);
     } else if (msg == MSG_TELEMETRY_200MS) {
-        _PrintTelemetry(pCar);
+        if (pCar->mode == APP_CAR_MODE_BALL_STATIC) {
+            _PrintTelemetry(pCar);
+        }
     }
 }
 
@@ -384,6 +387,8 @@ static void _FatherRunning(AppCarDef *pCar, MsgId_t msg)
     } else if (msg == MSG_TELEMETRY_200MS) {
         if (pCar->mode == APP_CAR_MODE_BALL_STATIC) {
             _PrintTelemetry(pCar);
+        } else if (pCar->mode == APP_CAR_MODE_BALANCE_AB) {
+            _PrintH4Telemetry(pCar);
         }
     }
 }
@@ -401,7 +406,9 @@ static void _FatherFinished(AppCarDef *pCar, MsgId_t msg)
         pCar->ballStateMs += APP_CAR_CONTROL_PERIOD_MS;
         pCar->pBallState(pCar);
     } else if (msg == MSG_TELEMETRY_200MS) {
-        _PrintTelemetry(pCar);
+        if (pCar->mode == APP_CAR_MODE_BALL_STATIC) {
+            _PrintTelemetry(pCar);
+        }
     }
 }
 
@@ -412,7 +419,9 @@ static void _FatherFault(AppCarDef *pCar, MsgId_t msg)
     } else if (msg == MSG_CONTROL_TICK) {
         _SampleInputs(pCar);
     } else if (msg == MSG_TELEMETRY_200MS) {
-        _PrintTelemetry(pCar);
+        if (pCar->mode == APP_CAR_MODE_BALL_STATIC) {
+            _PrintTelemetry(pCar);
+        }
     }
 }
 
@@ -1458,6 +1467,28 @@ static void _PrintTelemetry(const AppCarDef *pCar)
         (unsigned long)k230Debug.pollBytes,
         (unsigned long)k230Debug.lines,
         (unsigned long)k230Debug.parsed);
+}
+
+static void _PrintH4Telemetry(const AppCarDef *pCar)
+{
+    BspJy61pData_t imu;
+
+    (void)BspJy61p_GetData(&imu);
+    BspUart_Printf(
+        "[H4D] run=%lu score=%lu route=%u pulse=%lu ball=%d/%u acc=%d,%d,%d imu=%u cmd=%d,%d turn=%d\n",
+        (unsigned long)pCar->ballStateMs,
+        (unsigned long)pCar->elapsedMs,
+        (unsigned)pCar->routeState,
+        (unsigned long)pCar->routePulses,
+        (int)pCar->ballOffsetMm,
+        (unsigned)pCar->ballValid,
+        (int)imu.accXmg,
+        (int)imu.accYmg,
+        (int)imu.accZmg,
+        (unsigned)imu.valid,
+        (int)pCar->leftCommand,
+        (int)pCar->rightCommand,
+        (int)pCar->traceTurn);
 }
 
 static int16_t _GetTraceSpeed(AppCarMode_t mode)
